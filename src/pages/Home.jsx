@@ -1,0 +1,550 @@
+import { useEffect, useState, useRef } from 'react';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { db } from '../firebase/config';
+import { MapContainer, TileLayer, Marker, Popup, useMap, Circle } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+import { Link } from 'react-router-dom';
+import OrderModal from '../components/OrderModal';
+import { useAuth } from '../context/AuthContext';
+
+// Ícono personalizado verde
+function makeVendorIcon(emoji = '🏪') {
+  return L.divIcon({
+    className: '',
+    html: `<div class="vendor-marker"><span class="vendor-marker-icon">${emoji}</span></div>`,
+    iconSize: [42, 42],
+    iconAnchor: [21, 42],
+    popupAnchor: [0, -46],
+  });
+}
+
+function haversineDistance(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// Ícono azul pulsante para el comprador
+const userIcon = L.divIcon({
+  className: '',
+  html: `<div class="user-marker"><div class="user-marker-ring"></div><div class="user-marker-dot"></div></div>`,
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+  popupAnchor: [0, -16],
+});
+
+function MapController({ mapRef }) {
+  const map = useMap();
+  useEffect(() => { mapRef.current = map; }, [map, mapRef]);
+  return null;
+}
+
+// Centra el mapa en el usuario la primera vez que llega la posición
+function AutoCenter({ userPos }) {
+  const map = useMap();
+  const done = useRef(false);
+  useEffect(() => {
+    if (userPos && !done.current) {
+      map.flyTo([userPos.lat, userPos.lng], 15, { duration: 1.5 });
+      done.current = true;
+    }
+  }, [userPos, map]);
+  return null;
+}
+
+function formatDist(d) {
+  if (d === null) return '';
+  return d < 1 ? `${(d * 1000).toFixed(0)} m` : `${d.toFixed(1)} km`;
+}
+
+function distStyle(d) {
+  if (d === null) return { bg:'#f3f4f6', color:'#6b7280', label:'' };
+  if (d < 0.3)   return { bg:'#dcfce7', color:'#16a34a', label:'🟢' };
+  if (d < 1)     return { bg:'#f0fdf4', color:'#16a34a', label:'🟡' };
+  if (d < 3)     return { bg:'#fffbeb', color:'#d97706', label:'🟡' };
+  return               { bg:'#fff1f2', color:'#e11d48', label:'🔴' };
+}
+
+export default function Home() {
+  const { currentUser } = useAuth();
+  const [vendors, setVendors]           = useState([]);
+  const [search, setSearch]             = useState('');
+  const [userPos, setUserPos]           = useState(null);
+  const [selectedVendor, setSelected]   = useState(null);
+  const [orderModal, setOrderModal]     = useState(null);
+  const [mapReady, setMapReady]         = useState(false);
+  const mapRef     = useRef(null);
+  const markerRefs = useRef({});
+
+  function flyToSede(v, loc) {
+    if (!mapRef.current || !loc.lat) return;
+    mapRef.current.flyTo([loc.lat, loc.lng], 17, { duration: 1.2 });
+    setTimeout(() => markerRefs.current[`${v.id}-${loc.id}`]?.openPopup(), 1300);
+  }
+
+  useEffect(() => {
+    const watcher = navigator.geolocation?.watchPosition(
+      pos => setUserPos({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      null,
+      { enableHighAccuracy: true }
+    );
+    return () => navigator.geolocation?.clearWatch(watcher);
+  }, []);
+
+  useEffect(() => {
+    const q = query(collection(db, 'vendors'), where('isOnline', '==', true));
+    return onSnapshot(q, snap => setVendors(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+  }, []);
+
+  const filtered = vendors
+    .filter(v => {
+      const hasOnline = v.locations?.some(l => l.isOnline) || v.isOnline;
+      if (!hasOnline) return false;
+      if (!search) return true;
+      const q = search.toLowerCase();
+      const allProds = v.locations?.flatMap(l => l.products || []) || v.products || [];
+      return v.name?.toLowerCase().includes(q) || allProds.some(p => p.name?.toLowerCase().includes(q));
+    })
+    .map(v => {
+      // Distancia a la sede online más cercana
+      let distance = null;
+      if (userPos) {
+        const onlineLocs = v.locations?.filter(l => l.isOnline && l.lat) || [];
+        if (onlineLocs.length > 0) {
+          distance = Math.min(...onlineLocs.map(l => haversineDistance(userPos.lat, userPos.lng, l.lat, l.lng)));
+        } else if (v.location?.lat) {
+          distance = haversineDistance(userPos.lat, userPos.lng, v.location.lat, v.location.lng);
+        }
+      }
+      return { ...v, distance };
+    })
+    .sort((a, b) => (a.distance ?? Infinity) - (b.distance ?? Infinity));
+
+  function selectVendor(v) {
+    if (selectedVendor?.id === v.id) { setSelected(null); return; }
+    setSelected(v);
+    const onlineLocs = v.locations?.filter(l => l.isOnline && l.lat) || [];
+    if (onlineLocs.length === 1) {
+      // Una sola sede: volar directo
+      flyToSede(v, onlineLocs[0]);
+    } else if (onlineLocs.length === 0 && v.location?.lat) {
+      // Formato antiguo
+      mapRef.current?.flyTo([v.location.lat, v.location.lng], 17, { duration: 1.2 });
+    }
+    // Múltiples sedes: el usuario elige desde la tarjeta expandida
+  }
+
+  const waUrl = (v) => v.phone ? `https://wa.me/${v.phone.replace(/\D/g, '')}` : null;
+  const mapCenter = userPos ? [userPos.lat, userPos.lng] : [4.7109, -74.0721];
+
+  return (
+    <div style={s.container}>
+      {/* ── SIDEBAR ── */}
+      <aside style={s.sidebar}>
+        {/* Search */}
+        <div style={s.searchWrap}>
+          <div style={s.searchInner}>
+            <span style={s.searchIcon}>🔍</span>
+            <input
+              className="app-input"
+              style={s.searchInput}
+              placeholder="Buscar producto o vendedor..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+            {search && (
+              <button style={s.clearBtn} onClick={() => setSearch('')}>✕</button>
+            )}
+          </div>
+        </div>
+
+        {/* Count */}
+        <div style={s.countRow}>
+          <span style={s.countDot} />
+          <span style={s.countText}>
+            {filtered.length} vendedor{filtered.length !== 1 ? 'es' : ''}
+            {search ? ` con "${search}"` : ' en línea'}
+            {userPos && filtered.length > 0 ? ' · por distancia' : ''}
+          </span>
+        </div>
+
+        {/* List */}
+        <div style={s.list}>
+          {filtered.length === 0 && (
+            <div style={s.empty} className="anim-fade-in">
+              <div style={{ fontSize: '2.5rem', marginBottom: '0.6rem' }}>🗺️</div>
+              <p style={{ fontWeight: 600, marginBottom: '0.3rem' }}>Sin vendedores cerca</p>
+              <p style={{ fontSize: '0.85rem', color: '#9ca3af' }}>Intenta más tarde o amplía la búsqueda</p>
+            </div>
+          )}
+
+          {filtered.map((v, i) => {
+            const isSelected = selectedVendor?.id === v.id;
+            const isOwn      = currentUser?.uid === v.id;
+            const isNearest  = i === 0 && filtered.length > 1 && v.distance !== null;
+            const ds         = distStyle(v.distance);
+
+            // Productos que coinciden con la búsqueda
+            const allProds = v.locations?.flatMap(l => l.products||[])
+              .filter((p,i,arr) => arr.findIndex(x=>x.name===p.name)===i)
+              || v.products || [];
+            const matchedProds = search
+              ? allProds.filter(p => p.name.toLowerCase().includes(search.toLowerCase()))
+              : [];
+
+            return (
+              <div
+                key={v.id}
+                onClick={() => selectVendor(v)}
+                className={`anim-fade-up delay-${Math.min(i + 1, 5)}`}
+                style={{ ...s.card, ...(isSelected ? s.cardActive : {}) }}
+              >
+                {/* Badge más cercano */}
+                {isNearest && (
+                  <div style={s.nearestBadge}>
+                    🏆 {search ? `Más cercano con "${search}"` : 'Más cercano'}
+                  </div>
+                )}
+
+                {/* Header */}
+                <div style={s.cardHead}>
+                  <div style={s.avatar}>{v.name?.[0]?.toUpperCase()}</div>
+                  <div style={s.cardInfo}>
+                    <div style={s.vendorName}>{v.name}</div>
+                    {v.rating > 0 && (
+                      <div style={s.rating}>
+                        {'⭐'.repeat(Math.round(v.rating))} <span style={s.ratingNum}>{v.rating.toFixed(1)}</span>
+                      </div>
+                    )}
+                  </div>
+                  {v.distance !== null && (
+                    <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:'0.15rem' }}>
+                      <span style={{ ...s.distTag, background: ds.bg, color: ds.color, fontWeight:700, fontSize:'0.88rem' }}>
+                        {formatDist(v.distance)}
+                      </span>
+                      <span style={{ fontSize:'0.65rem', color: ds.color, opacity:0.8 }}>
+                        {v.distance < 0.3 ? 'Muy cerca' : v.distance < 1 ? 'Cerca' : v.distance < 3 ? 'Moderado' : 'Lejos'}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Productos que coinciden con búsqueda (resaltados) */}
+                {matchedProds.length > 0 && (
+                  <div style={s.matchRow}>
+                    {matchedProds.map((p,idx) => (
+                      <span key={idx} style={s.matchTag}>
+                        {p.emoji} {p.name} — <strong>${p.price}/{p.unit}</strong>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Products preview (all sedes combined) */}
+                {(() => {
+                  const allProds = v.locations?.flatMap(l => l.products || [])
+                    .filter((p,i,arr) => arr.findIndex(x=>x.name===p.name)===i)
+                    || v.products || [];
+                  return (
+                    <div style={s.tagRow}>
+                      {allProds.slice(0, 4).map((p,i) => (
+                        <span key={i} style={s.tag}>{p.emoji} {p.name}</span>
+                      ))}
+                      {allProds.length > 4 && <span style={s.tagMore}>+{allProds.length - 4}</span>}
+                    </div>
+                  );
+                })()}
+
+                {/* Expanded */}
+                {isSelected && (
+                  <div style={s.expanded} onClick={e => e.stopPropagation()} className="anim-fade-in">
+                    <div style={s.divider} />
+                    {v.description && <p style={s.description}>{v.description}</p>}
+
+                    {isOwn ? (
+                      <div style={s.ownBadge}>🏪 Este es tu puesto</div>
+                    ) : (() => {
+                      const onlineLocs = v.locations?.filter(l => l.isOnline && l.lat) || [];
+
+                      // ── MULTI-SEDE ──────────────────────────────
+                      if (onlineLocs.length > 1) {
+                        return (
+                          <div style={{ display:'flex', flexDirection:'column', gap:'0.5rem' }}>
+                            <p style={s.sedeHint}>Elige una sede para ver productos y pedir:</p>
+                            {onlineLocs.map(loc => {
+                              const dist = userPos ? haversineDistance(userPos.lat, userPos.lng, loc.lat, loc.lng) : null;
+                              const prods = loc.products || [];
+                              return (
+                                <div key={loc.id} style={s.sedeCard}>
+                                  <div style={s.sedeCardHead}>
+                                    <div>
+                                      <span style={s.sedeName}>📍 {loc.name}</span>
+                                      {dist !== null && <span style={s.sedeDist}>{formatDist(dist)}</span>}
+                                    </div>
+                                    <button style={s.sedeMapBtn} onClick={() => flyToSede(v, loc)}>
+                                      Ver en mapa →
+                                    </button>
+                                  </div>
+                                  {prods.length > 0 && (
+                                    <div style={s.sedeProdRow}>
+                                      {prods.slice(0,4).map((p,i) => (
+                                        <span key={i} style={s.tag}>{p.emoji} {p.name} <span style={{ color:'var(--green)', fontWeight:700 }}>${p.price}</span></span>
+                                      ))}
+                                      {prods.length > 4 && <span style={s.tagMore}>+{prods.length-4}</span>}
+                                    </div>
+                                  )}
+                                  <div style={s.actionRow}>
+                                    <button style={s.btnDomicilio} onClick={() => setOrderModal({ vendor:v, type:'domicilio', locationId:loc.id })}>
+                                      🛵 Domicilio
+                                    </button>
+                                    <button style={s.btnRetiro} onClick={() => setOrderModal({ vendor:v, type:'retiro', locationId:loc.id })}>
+                                      🛒 Ir a comprar
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      }
+
+                      // ── UNA SOLA SEDE (o formato antiguo) ───────
+                      const prods = onlineLocs[0]?.products?.length
+                        ? onlineLocs[0].products
+                        : (v.products || []);
+                      return (
+                        <>
+                          {prods.length > 0 && (
+                            <div style={s.productTable}>
+                              {prods.map((p,i) => (
+                                <div key={i} style={s.productTableRow}>
+                                  <span>{p.emoji} {p.name}</span>
+                                  <div style={{ display:'flex', alignItems:'center', gap:'0.4rem' }}>
+                                    {p.stock && parseInt(p.stock) <= 5 && parseInt(p.stock) > 0 && <span style={s.lowStock}>¡Solo {p.stock}!</span>}
+                                    {p.stock === '0' && <span style={s.outStock}>Agotado</span>}
+                                    <span style={s.productPrice}>${p.price}/{p.unit}</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <div style={s.actionRow}>
+                            <button style={s.btnDomicilio} onClick={() => setOrderModal({ vendor:v, type:'domicilio' })}>🛵 Domicilio</button>
+                            <button style={s.btnRetiro}    onClick={() => setOrderModal({ vendor:v, type:'retiro' })}>🛒 Ir a comprar</button>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </aside>
+
+      {/* ── MAPA ── */}
+      <div style={s.mapWrap}>
+        {/* Botón flotante para centrar en el usuario */}
+        {userPos && (
+          <button
+            style={s.centerBtn}
+            onClick={() => mapRef.current?.flyTo([userPos.lat, userPos.lng], 16, { duration: 1 })}
+            title="Centrar en mi ubicación"
+          >
+            📍 Mi ubicación
+          </button>
+        )}
+
+        <MapContainer
+          center={mapCenter} zoom={14}
+          style={{ height: '100%', width: '100%' }}
+          whenReady={() => setMapReady(true)}
+        >
+          <TileLayer
+            url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+            attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/attributions">CARTO</a>'
+          />
+          <MapController mapRef={mapRef} />
+          <AutoCenter userPos={userPos} />
+
+          {/* Marcador del comprador */}
+          {userPos && (
+            <Marker position={[userPos.lat, userPos.lng]} icon={userIcon}>
+              <Popup>
+                <div style={{ padding:'0.4rem 0.2rem', textAlign:'center' }}>
+                  <strong style={{ color:'#3b82f6' }}>📍 Tú estás aquí</strong>
+                </div>
+              </Popup>
+            </Marker>
+          )}
+          {filtered.flatMap(v => {
+            // Soporte multi-sede y formato antiguo
+            const locs = v.locations?.filter(l => l.isOnline && l.lat && l.lng)
+              || (v.location?.lat ? [{ id: 'main', lat: v.location.lat, lng: v.location.lng, name: '' }] : []);
+            return locs.map(loc => (
+              <Marker
+                key={`${v.id}-${loc.id}`}
+                position={[loc.lat, loc.lng]}
+                icon={makeVendorIcon(v.products?.[0]?.emoji || '🏪')}
+                ref={el => { if (el) markerRefs.current[v.id] = el; }}
+              >
+                <Popup>
+                  <div style={s.popup}>
+                    <div style={s.popupHead}>
+                      <div>
+                        <strong style={s.popupName}>{v.name}</strong>
+                        {loc.name && <div style={{ fontSize:'0.75rem', color:'#888' }}>📍 {loc.name}</div>}
+                      </div>
+                      {v.rating > 0 && <span style={s.popupRating}>⭐ {v.rating.toFixed(1)}</span>}
+                    </div>
+                    <div style={s.popupProducts}>
+                      {v.products?.slice(0, 3).map(p => (
+                        <div key={p.id} style={s.popupProduct}>
+                          <span>{p.emoji} {p.name}</span>
+                          <strong style={{ color: 'var(--green)' }}>${p.price}/{p.unit}</strong>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={s.popupActions}>
+                      {waUrl(v) && (
+                        <a href={waUrl(v)} target="_blank" rel="noreferrer" style={s.popupWA}>📱 WhatsApp</a>
+                      )}
+                      <Link to={`/vendor/${v.id}`} style={s.popupProfile}>Ver perfil →</Link>
+                    </div>
+                  </div>
+                </Popup>
+              </Marker>
+            ));
+          })}
+        </MapContainer>
+
+        {/* Badge flotante sobre el mapa */}
+        {!mapReady && (
+          <div style={s.mapLoading}>
+            <div style={s.mapLoadingDot} /> Cargando mapa...
+          </div>
+        )}
+      </div>
+
+      {orderModal && (
+        <OrderModal
+          vendor={orderModal.vendor}
+          type={orderModal.type}
+          locationId={orderModal.locationId || null}
+          onClose={() => setOrderModal(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+const s = {
+  container: { display: 'flex', height: 'calc(100vh - 60px)', background: 'var(--bg)' },
+
+  /* Sidebar */
+  sidebar: {
+    width: '340px', minWidth: '280px', display: 'flex', flexDirection: 'column',
+    background: '#fff', borderRight: '1px solid var(--border)',
+    overflow: 'hidden',
+  },
+  searchWrap: { padding: '0.9rem 0.9rem 0.5rem' },
+  searchInner: { position: 'relative', display: 'flex', alignItems: 'center' },
+  searchIcon: { position: 'absolute', left: '0.8rem', fontSize: '0.9rem', pointerEvents: 'none', zIndex: 1 },
+  searchInput: {
+    paddingLeft: '2.2rem', paddingRight: '2.2rem',
+    border: '1.5px solid var(--border)', borderRadius: '10px',
+    fontSize: '0.9rem', background: 'var(--bg)',
+    transition: 'all 0.2s',
+  },
+  clearBtn: {
+    position: 'absolute', right: '0.7rem', background: 'none',
+    border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: '0.85rem',
+  },
+  countRow: { display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0 1rem 0.5rem' },
+  countDot: { width: '8px', height: '8px', borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 0 3px rgba(34,197,94,0.2)', animation: 'ping 2s ease-in-out infinite' },
+  countText: { fontSize: '0.8rem', color: 'var(--text-2)', fontWeight: 500 },
+  list: { flex: 1, overflowY: 'auto', padding: '0 0.9rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' },
+  empty: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '3rem 1rem', color: 'var(--text-2)', textAlign: 'center' },
+
+  /* Card */
+  card: {
+    background: '#fff', borderRadius: 'var(--radius)',
+    padding: '0.9rem', cursor: 'pointer',
+    border: '1.5px solid var(--border)',
+    transition: 'border-color 0.2s, box-shadow 0.2s, transform 0.15s',
+    boxShadow: 'var(--shadow-sm)',
+  },
+  cardActive: { borderColor: 'var(--green)', boxShadow: '0 0 0 3px rgba(45,122,45,0.1)', transform: 'none' },
+  cardHead: { display: 'flex', alignItems: 'center', gap: '0.7rem', marginBottom: '0.55rem' },
+  avatar: {
+    width: '38px', height: '38px', borderRadius: '50%', flexShrink: 0,
+    background: 'linear-gradient(135deg, var(--green), var(--green-mid))',
+    color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontWeight: 700, fontSize: '1rem',
+  },
+  cardInfo: { flex: 1, minWidth: 0 },
+  vendorName: { fontWeight: 700, fontSize: '0.95rem', color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  rating: { fontSize: '0.78rem', color: '#f59e0b', marginTop: '0.1rem', display: 'flex', alignItems: 'center', gap: '0.2rem' },
+  ratingNum: { color: 'var(--text-2)', fontWeight: 600 },
+  distTag: { fontSize:'0.82rem', fontWeight:700, padding:'0.25rem 0.6rem', borderRadius:'20px', whiteSpace:'nowrap', flexShrink:0, border:'1px solid rgba(0,0,0,0.06)' },
+  nearestBadge: { background:'linear-gradient(135deg,#fef3c7,#fde68a)', color:'#92400e', fontSize:'0.75rem', fontWeight:700, padding:'0.25rem 0.7rem', borderRadius:'20px', marginBottom:'0.4rem', display:'inline-block', border:'1px solid #fcd34d' },
+  matchRow: { display:'flex', flexWrap:'wrap', gap:'0.3rem', margin:'0.1rem 0' },
+  matchTag: { background:'#f0fdf4', color:'#166534', fontSize:'0.78rem', padding:'0.22rem 0.55rem', borderRadius:'20px', border:'1px solid #bbf7d0', fontWeight:500 },
+  tagRow: { display: 'flex', flexWrap: 'wrap', gap: '0.25rem' },
+  tag: { background: 'var(--bg)', color: 'var(--text-2)', fontSize: '0.75rem', padding: '0.18rem 0.5rem', borderRadius: '20px', border: '1px solid var(--border)' },
+  tagMore: { background: 'var(--green-light)', color: 'var(--green)', fontSize: '0.75rem', padding: '0.18rem 0.5rem', borderRadius: '20px', fontWeight: 600 },
+
+  /* Expanded */
+  expanded: { marginTop: '0.7rem' },
+  divider: { height: '1px', background: 'var(--border)', margin: '0 0 0.7rem' },
+  description: { fontSize: '0.83rem', color: 'var(--text-2)', marginBottom: '0.6rem', lineHeight: 1.5 },
+  productTable: { display: 'flex', flexDirection: 'column', gap: '0', marginBottom: '0.8rem', borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--border)' },
+  productTableRow: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    padding: '0.4rem 0.6rem', fontSize: '0.85rem',
+    borderBottom: '1px solid var(--border)', background: '#fff',
+  },
+  lowStock: { fontSize: '0.72rem', background: '#fef3c7', color: '#92400e', padding: '0.1rem 0.4rem', borderRadius: '20px', fontWeight: 600 },
+  outStock: { fontSize: '0.72rem', background: '#fee2e2', color: 'var(--red)', padding: '0.1rem 0.4rem', borderRadius: '20px', fontWeight: 600 },
+  productPrice: { color: 'var(--green)', fontWeight: 700, fontSize: '0.83rem' },
+  actionRow: { display: 'flex', gap: '0.5rem' },
+  btnDomicilio: { flex: 1, background: 'linear-gradient(135deg, #f59e0b, #f97316)', color: '#fff', border: 'none', padding: '0.55rem 0', borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer', transition: 'opacity 0.15s', fontFamily: 'inherit' },
+  btnRetiro:    { flex: 1, background: 'linear-gradient(135deg, var(--green), var(--green-mid))', color: '#fff', border: 'none', padding: '0.55rem 0', borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer', transition: 'opacity 0.15s', fontFamily: 'inherit' },
+  ownBadge:     { background:'var(--green-light)', color:'var(--green)', textAlign:'center', padding:'0.5rem', borderRadius:'var(--radius-sm)', fontSize:'0.85rem', fontWeight:600 },
+  sedeHint:     { fontSize:'0.8rem', color:'var(--text-2)', marginBottom:'0.2rem', fontStyle:'italic' },
+  sedeCard:     { border:'1.5px solid var(--border)', borderRadius:'var(--radius)', padding:'0.7rem', display:'flex', flexDirection:'column', gap:'0.5rem', background:'var(--bg)' },
+  sedeCardHead: { display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'0.3rem' },
+  sedeName:     { fontWeight:700, fontSize:'0.9rem', color:'var(--text)' },
+  sedeDist:     { marginLeft:'0.4rem', background:'var(--green-light)', color:'var(--green)', fontSize:'0.72rem', fontWeight:700, padding:'0.15rem 0.45rem', borderRadius:'20px' },
+  sedeMapBtn:   { fontSize:'0.78rem', color:'var(--green)', fontWeight:600, background:'none', border:'1px solid var(--green-border)', padding:'0.2rem 0.6rem', borderRadius:'20px', cursor:'pointer', fontFamily:'inherit' },
+  sedeProdRow:  { display:'flex', flexWrap:'wrap', gap:'0.25rem' },
+
+  /* Map */
+  mapWrap: { flex: 1, position: 'relative' },
+  centerBtn: {
+    position: 'absolute', bottom: '1.5rem', right: '1rem', zIndex: 1000,
+    background: '#fff', color: '#3b82f6',
+    border: '2px solid #3b82f6', borderRadius: '25px',
+    padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.85rem',
+    cursor: 'pointer', fontFamily: 'inherit',
+    boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+    transition: 'all 0.2s ease',
+  },
+  mapLoading: { position: 'absolute', top: '1rem', left: '50%', transform: 'translateX(-50%)', background: '#fff', padding: '0.5rem 1rem', borderRadius: '20px', fontSize: '0.85rem', color: 'var(--text-2)', boxShadow: 'var(--shadow)', display: 'flex', alignItems: 'center', gap: '0.5rem', zIndex: 999 },
+  mapLoadingDot: { width: '8px', height: '8px', borderRadius: '50%', background: 'var(--green)', animation: 'ping 1s ease-in-out infinite' },
+
+  /* Popup */
+  popup: { padding: '0.9rem', minWidth: '180px' },
+  popupHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' },
+  popupName: { fontSize: '0.95rem', color: 'var(--text)' },
+  popupRating: { fontSize: '0.8rem', color: '#f59e0b', fontWeight: 600 },
+  popupProducts: { display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '0.7rem' },
+  popupProduct: { display: 'flex', justifyContent: 'space-between', fontSize: '0.83rem', color: 'var(--text-2)' },
+  popupActions: { display: 'flex', gap: '0.5rem', borderTop: '1px solid var(--border)', paddingTop: '0.6rem' },
+  popupWA: { background: '#25d366', color: '#fff', textDecoration: 'none', padding: '0.35rem 0.7rem', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 600 },
+  popupProfile: { color: 'var(--green)', fontSize: '0.8rem', fontWeight: 600, alignSelf: 'center', textDecoration: 'none' },
+};

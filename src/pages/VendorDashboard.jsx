@@ -1,0 +1,541 @@
+import { useEffect, useState, useRef } from 'react';
+import { doc, getDoc, updateDoc, collection, query, where, onSnapshot } from 'firebase/firestore';
+import { db } from '../firebase/config';
+import { useAuth } from '../context/AuthContext';
+import { useNavigate } from 'react-router-dom';
+import BackButton from '../components/BackButton';
+import { v4 as uuidv4 } from 'uuid';
+import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
+  iconUrl:       'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
+  shadowUrl:     'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+});
+
+const COUNTRY_CODES = [
+  { code:'+57',  flag:'🇨🇴', name:'Colombia'   },
+  { code:'+52',  flag:'🇲🇽', name:'México'     },
+  { code:'+1',   flag:'🇺🇸', name:'EE.UU.'    },
+  { code:'+54',  flag:'🇦🇷', name:'Argentina'  },
+  { code:'+55',  flag:'🇧🇷', name:'Brasil'     },
+  { code:'+56',  flag:'🇨🇱', name:'Chile'      },
+  { code:'+51',  flag:'🇵🇪', name:'Perú'       },
+  { code:'+58',  flag:'🇻🇪', name:'Venezuela'  },
+  { code:'+593', flag:'🇪🇨', name:'Ecuador'    },
+  { code:'+591', flag:'🇧🇴', name:'Bolivia'    },
+];
+
+const EMOJIS = ['🥑','🍋','🍊','🍌','🍅','🌽','🥕','🧅','🧄','🥦','🍓','🍇','🥭','🍍','🌶️','🫑','🫒','🥝','🍒','🍑','🥬','🌿','🫚','🧃','🥤','🍺','☕','🌮','🍕','🍔'];
+
+const ORDER_GROUPS = [
+  { key:'pending',   label:'Pendientes',  statuses:['pendiente'],         color:'#f59e0b', defaultOpen:true  },
+  { key:'active',    label:'En proceso',  statuses:['en_camino','listo'], color:'#3b82f6', defaultOpen:true  },
+  { key:'completed', label:'Completados', statuses:['completado'],        color:'#2d7a2d', defaultOpen:false },
+  { key:'cancelled', label:'Cancelados',  statuses:['cancelado'],         color:'#dc2626', defaultOpen:false },
+];
+
+function orderColor(s) {
+  return { pendiente:'#f59e0b', en_camino:'#3b82f6', listo:'#8b5cf6', completado:'#2d7a2d', cancelado:'#dc2626' }[s] || '#999';
+}
+function orderLabel(s) {
+  return { pendiente:'Pendiente', en_camino:'En camino', listo:'Listo p/ recoger', completado:'Completado', cancelado:'Cancelado' }[s] || s;
+}
+
+function MapClickHandler({ activeLocId, onSet }) {
+  useMapEvents({ click(e) { if (activeLocId) onSet(activeLocId, e.latlng.lat, e.latlng.lng); } });
+  return null;
+}
+function RecenterMap({ lat, lng }) {
+  const map = useMap();
+  useEffect(() => { if (lat && lng) map.setView([lat, lng], 15); }, [lat, lng, map]);
+  return null;
+}
+
+// ── Sección colapsable ──────────────────────────────
+function OrderSection({ group, orders, onUpdateStatus }) {
+  const [open, setOpen] = useState(group.defaultOpen);
+  const filtered = orders.filter(o => group.statuses.includes(o.status));
+  if (filtered.length === 0) return null;
+
+  return (
+    <div style={s.orderSection}>
+      <button style={{ ...s.orderSectionHead, borderLeft: `4px solid ${group.color}` }} onClick={() => setOpen(o => !o)}>
+        <div style={{ display:'flex', alignItems:'center', gap:'0.5rem' }}>
+          <span style={{ ...s.groupDot, background: group.color }} />
+          <span style={s.groupLabel}>{group.label}</span>
+          <span style={{ ...s.groupCount, background: group.color }}>{filtered.length}</span>
+        </div>
+        <span style={s.chevron}>{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div style={s.orderList}>
+          {filtered.map(order => (
+            <div key={order.id} style={{ ...s.orderCard, borderLeft:`4px solid ${orderColor(order.status)}` }}>
+              <div style={s.orderHead}>
+                <div style={{ display:'flex', gap:'0.4rem', alignItems:'center', flexWrap:'wrap' }}>
+                  <span style={{ ...s.typePill, background: order.type==='domicilio'?'#fef3c7':'#f0f7f0', color: order.type==='domicilio'?'#92400e':'#166534' }}>
+                    {order.type==='domicilio' ? '🛵 Domicilio' : '🛒 Retiro'}
+                  </span>
+                  <strong style={{ fontSize:'0.9rem' }}>{order.buyerName}</strong>
+                  {order.locationName && <span style={s.locPill}>📍 {order.locationName}</span>}
+                </div>
+                <span style={{ ...s.statusPill, background: orderColor(order.status) }}>{orderLabel(order.status)}</span>
+              </div>
+              <div style={s.orderProducts}>
+                {order.products?.map((p,i) => <span key={i} style={s.orderProduct}>{p.emoji} {p.name} ×{p.qty}</span>)}
+              </div>
+              {order.address && <p style={s.orderMeta}>📍 {order.address}</p>}
+              {order.notes   && <p style={s.orderMeta}>📝 {order.notes}</p>}
+              {order.status === 'pendiente' && (
+                <div style={s.orderActions}>
+                  <button style={s.btnAccept} onClick={() => onUpdateStatus(order.id, order.type==='domicilio'?'en_camino':'listo')}>
+                    {order.type==='domicilio' ? '🛵 Aceptar — salgo a entregar' : '✅ Listo — puede venir'}
+                  </button>
+                  <button style={s.btnReject} onClick={() => onUpdateStatus(order.id,'cancelado')}>✕</button>
+                </div>
+              )}
+              {(order.status==='en_camino'||order.status==='listo') && (
+                <button style={s.btnComplete} onClick={() => onUpdateStatus(order.id,'completado')}>
+                  {order.status==='en_camino' ? '✅ Marcar como entregado' : '✅ Confirmar recogida'}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Dashboard principal ─────────────────────────────
+export default function VendorDashboard() {
+  const { currentUser, userRole } = useAuth();
+  const navigate = useNavigate();
+
+  const [vendor,        setVendor]        = useState(null);
+  const [orders,        setOrders]        = useState([]);
+  const [locations,     setLocations]     = useState([]);
+  const [activeLocId,   setActiveLocId]   = useState(null); // sede en mapa
+  const [prodLocId,     setProdLocId]     = useState(null); // sede en productos
+  const [countryCode,   setCountryCode]   = useState('+57');
+  const [phoneNumber,   setPhoneNumber]   = useState('');
+  const [description,   setDescription]  = useState('');
+  const [form,          setForm]          = useState({ name:'', emoji:'🥑', price:'', unit:'pieza', stock:'' });
+  const [editId,        setEditId]        = useState(null);
+  const [saving,        setSaving]        = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileSaved,  setProfileSaved]  = useState(false);
+  const [gpsMsg,        setGpsMsg]        = useState('');
+
+  useEffect(() => {
+    if (!currentUser) { navigate('/login'); return; }
+    if (userRole && userRole !== 'vendor') navigate('/');
+  }, [currentUser, userRole, navigate]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    getDoc(doc(db, 'vendors', currentUser.uid)).then(snap => {
+      if (!snap.exists()) return;
+      const d = snap.data();
+      setVendor(d);
+      setCountryCode(d.phoneCode || '+57');
+      setPhoneNumber(d.phoneNumber || '');
+      setDescription(d.description || '');
+
+      let locs = [];
+      if (d.locations?.length > 0) {
+        // Migrar: si la sede no tiene products, copiar del nivel raíz
+        locs = d.locations.map(l => ({
+          ...l,
+          products: l.products || (d.products || []),
+        }));
+      } else if (d.location?.lat) {
+        locs = [{ id: uuidv4(), name:'Principal', lat:d.location.lat, lng:d.location.lng, isOnline:d.isOnline||false, products: d.products||[] }];
+      } else {
+        locs = [{ id: uuidv4(), name:'Principal', lat:null, lng:null, isOnline:false, products:[] }];
+      }
+      setLocations(locs);
+      setProdLocId(locs[0]?.id || null);
+      setActiveLocId(null);
+    });
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const q = query(collection(db, 'orders'), where('vendorId', '==', currentUser.uid));
+    return onSnapshot(q, snap => {
+      const list = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+      list.sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
+      setOrders(list);
+    }, err => console.error(err));
+  }, [currentUser]);
+
+  // ── Guardar locations ────────────────────────────
+  async function saveLocs(updated) {
+    setLocations(updated);
+    const anyOnline = updated.some(l => l.isOnline);
+    await updateDoc(doc(db, 'vendors', currentUser.uid), { locations: updated, isOnline: anyOnline });
+  }
+
+  function addLocation() {
+    const newLoc = { id:uuidv4(), name:`Sede ${locations.length+1}`, lat:null, lng:null, isOnline:false, products:[] };
+    const updated = [...locations, newLoc];
+    setLocations(updated);
+    setActiveLocId(newLoc.id);
+    setProdLocId(newLoc.id);
+    updateDoc(doc(db, 'vendors', currentUser.uid), { locations: updated });
+  }
+
+  async function toggleLocation(locId) {
+    await saveLocs(locations.map(l => l.id===locId ? {...l, isOnline:!l.isOnline} : l));
+  }
+
+  function renameLocation(locId, name) {
+    setLocations(prev => prev.map(l => l.id===locId ? {...l,name} : l));
+  }
+  async function saveLocName() {
+    await updateDoc(doc(db, 'vendors', currentUser.uid), { locations });
+  }
+
+  async function setLocationPos(locId, lat, lng) {
+    const updated = locations.map(l => l.id===locId ? {...l,lat,lng} : l);
+    await saveLocs(updated);
+    setGpsMsg('✅ Ubicación guardada');
+    setTimeout(() => setGpsMsg(''), 2000);
+  }
+
+  function useGPSForLoc(locId) {
+    setGpsMsg('');
+    navigator.geolocation?.getCurrentPosition(
+      pos => setLocationPos(locId, pos.coords.latitude, pos.coords.longitude),
+      ()  => setGpsMsg('⚠️ GPS no disponible, haz clic en el mapa')
+    );
+  }
+
+  async function deleteLocation(locId) {
+    const updated = locations.filter(l => l.id!==locId);
+    if (activeLocId===locId) setActiveLocId(updated[0]?.id||null);
+    if (prodLocId===locId)   setProdLocId(updated[0]?.id||null);
+    await saveLocs(updated);
+  }
+
+  // ── Productos por sede ───────────────────────────
+  const prodLoc = locations.find(l => l.id===prodLocId) || locations[0];
+  const currentProducts = prodLoc?.products || [];
+
+  async function saveProducts(newProducts) {
+    const updated = locations.map(l => l.id===prodLoc.id ? {...l, products:newProducts} : l);
+    await saveLocs(updated);
+  }
+
+  async function handleAddProduct(e) {
+    e.preventDefault();
+    if (!form.name) return;
+    setSaving(true);
+    const newProducts = editId
+      ? currentProducts.map(p => p.id===editId ? {...form,id:editId} : p)
+      : [...currentProducts, {...form, id:uuidv4()}];
+    setEditId(null);
+    await saveProducts(newProducts);
+    setForm({ name:'', emoji:'🥑', price:'', unit:'pieza', stock:'' });
+    setSaving(false);
+  }
+
+  async function deleteProduct(id) { await saveProducts(currentProducts.filter(p => p.id!==id)); }
+  function startEdit(p) { setForm({ name:p.name, emoji:p.emoji, price:p.price, unit:p.unit, stock:p.stock }); setEditId(p.id); }
+
+  // ── Pedidos ──────────────────────────────────────
+  async function updateOrderStatus(orderId, newStatus) {
+    await updateDoc(doc(db, 'orders', orderId), { status:newStatus });
+    if (newStatus==='en_camino'||newStatus==='listo') {
+      const order = orders.find(o => o.id===orderId);
+      if (order?.products?.length) {
+        // Descontar stock de la sede correspondiente
+        const locId = order.locationId;
+        const updated = locations.map(l => {
+          if (locId && l.id!==locId) return l;
+          const newProds = (l.products||[]).map(p => {
+            const ordered = order.products.find(op => op.id===p.id);
+            const stock = parseInt(p.stock);
+            if (ordered && !isNaN(stock)) return {...p, stock:String(Math.max(0,stock-ordered.qty))};
+            return p;
+          });
+          return {...l, products:newProds};
+        });
+        await saveLocs(updated);
+      }
+    }
+  }
+
+  // ── Perfil ───────────────────────────────────────
+  async function handleSaveProfile(e) {
+    e.preventDefault();
+    setSavingProfile(true);
+    await updateDoc(doc(db, 'vendors', currentUser.uid), {
+      phoneCode:countryCode, phoneNumber,
+      phone: countryCode.replace('+','') + phoneNumber, description,
+    });
+    setSavingProfile(false);
+    setProfileSaved(true);
+    setTimeout(() => setProfileSaved(false), 2500);
+  }
+
+  if (!vendor) return <div style={s.loading}>Cargando...</div>;
+
+  const activeLoc   = locations.find(l => l.id===activeLocId);
+  const mapCenter   = activeLoc?.lat ? [activeLoc.lat, activeLoc.lng] : [4.7109, -74.0721];
+  const pendingCount = orders.filter(o => o.status==='pendiente').length;
+  const onlineCount  = locations.filter(l => l.isOnline).length;
+
+  return (
+    <div style={s.page}>
+      <div style={s.container}>
+
+        {/* HEADER */}
+        <div style={s.header}>
+          <div style={s.headerLeft}>
+            <BackButton to="/" label="Volver al mapa" />
+            <div>
+              <h2 style={s.title}>Panel de Vendedor</h2>
+              <p style={s.subtitle}>Hola, {vendor.name} · {onlineCount} sede{onlineCount!==1?'s':''} en línea</p>
+            </div>
+          </div>
+          {pendingCount > 0 && (
+            <div style={s.alertBadge}>🔔 {pendingCount} pedido{pendingCount>1?'s':''} nuevo{pendingCount>1?'s':''}</div>
+          )}
+        </div>
+
+        {/* PEDIDOS COLAPSABLES */}
+        <div style={{ ...s.section, borderColor: pendingCount>0?'#f59e0b':'transparent' }}>
+          <h3 style={{ ...s.sectionTitle, marginBottom:'0.8rem' }}>📦 Pedidos recibidos</h3>
+          {orders.length === 0 ? (
+            <p style={s.empty}>Sin pedidos aún — aparecen aquí en tiempo real.</p>
+          ) : (
+            <div style={{ display:'flex', flexDirection:'column', gap:'0.5rem' }}>
+              {ORDER_GROUPS.map(group => (
+                <OrderSection key={group.key} group={group} orders={orders} onUpdateStatus={updateOrderStatus} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* SEDES */}
+        <div style={s.section}>
+          <div style={s.sectionHead}>
+            <h3 style={s.sectionTitle}>📍 Mis sedes</h3>
+            <button style={s.addLocBtn} onClick={addLocation}>+ Agregar sede</button>
+          </div>
+          {locations.length===0 && <p style={s.empty}>No tienes sedes. Agrega una para aparecer en el mapa.</p>}
+          <div style={s.locList}>
+            {locations.map(loc => (
+              <div key={loc.id} style={{ ...s.locCard, ...(activeLocId===loc.id?s.locCardActive:{}) }}>
+                <div style={s.locRow}>
+                  <input style={s.locNameInput} value={loc.name}
+                    onChange={e => renameLocation(loc.id, e.target.value)}
+                    onBlur={saveLocName} />
+                  <span style={s.locPos}>{loc.lat ? `${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}` : 'Sin ubicación'}</span>
+                </div>
+                <div style={s.locActions}>
+                  <button
+                    style={{ ...s.locBtn, background:activeLocId===loc.id?'#2d7a2d':'#f0f7f0', color:activeLocId===loc.id?'#fff':'#2d7a2d' }}
+                    onClick={() => setActiveLocId(activeLocId===loc.id?null:loc.id)}>
+                    {activeLocId===loc.id ? '✏️ Editando mapa' : '📍 Fijar en mapa'}
+                  </button>
+                  <button style={s.locBtn} onClick={() => useGPSForLoc(loc.id)}>🛰️ GPS</button>
+                  <button
+                    style={{ ...s.locToggleBtn, background:loc.isOnline?'#2d7a2d':'#e5e7eb', color:loc.isOnline?'#fff':'#555' }}
+                    onClick={() => toggleLocation(loc.id)}>
+                    {loc.isOnline ? '🟢 En línea' : '⚫ Offline'}
+                  </button>
+                  <button style={s.locDeleteBtn} onClick={() => deleteLocation(loc.id)}>🗑️</button>
+                </div>
+              </div>
+            ))}
+          </div>
+          {gpsMsg && <p style={{ fontSize:'0.82rem', color:gpsMsg.startsWith('✅')?'#2d7a2d':'#dc2626', margin:'0.3rem 0' }}>{gpsMsg}</p>}
+          <p style={s.mapHint}>
+            {activeLocId
+              ? `👆 Haz clic en el mapa para fijar "${locations.find(l=>l.id===activeLocId)?.name}"`
+              : 'Selecciona una sede → "📍 Fijar en mapa" → haz clic en el mapa'}
+          </p>
+          <div style={s.mapWrap}>
+            <MapContainer center={mapCenter} zoom={14} style={{ height:'200px', width:'100%' }}>
+              <TileLayer url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png" attribution='© OpenStreetMap © CARTO' />
+              <MapClickHandler activeLocId={activeLocId} onSet={setLocationPos} />
+              {activeLoc?.lat && <RecenterMap lat={activeLoc.lat} lng={activeLoc.lng} />}
+              {locations.filter(l=>l.lat).map(l => <Marker key={l.id} position={[l.lat,l.lng]} />)}
+            </MapContainer>
+          </div>
+        </div>
+
+        {/* PRODUCTOS POR SEDE */}
+        <div style={s.section}>
+          <div style={s.sectionHead}>
+            <h3 style={s.sectionTitle}>🛒 Productos</h3>
+          </div>
+
+          {/* Tabs de sedes */}
+          <div style={s.locTabs}>
+            {locations.map(loc => (
+              <button key={loc.id}
+                style={{ ...s.locTab, ...(prodLocId===loc.id ? s.locTabActive : {}) }}
+                onClick={() => { setProdLocId(loc.id); setEditId(null); setForm({name:'',emoji:'🥑',price:'',unit:'pieza',stock:''}); }}>
+                {loc.name}
+                {loc.isOnline && <span style={s.onlineDot} />}
+              </button>
+            ))}
+          </div>
+
+          {prodLoc && (
+            <>
+              <form onSubmit={handleAddProduct} style={{ marginBottom:'1rem' }}>
+                <div style={s.emojiRow}>
+                  {EMOJIS.map(e => (
+                    <button key={e} type="button" onClick={() => setForm({...form,emoji:e})}
+                      style={{ ...s.emojiBtn, ...(form.emoji===e?s.emojiBtnActive:{}) }}>{e}</button>
+                  ))}
+                </div>
+                <div style={s.prodFormRow}>
+                  <input className="app-input" placeholder="Nombre del producto" value={form.name} onChange={e => setForm({...form,name:e.target.value})} required style={{ flex:2,minWidth:'120px' }} />
+                  <input className="app-input" placeholder="Precio $" type="number" value={form.price} onChange={e => setForm({...form,price:e.target.value})} style={{ width:'90px' }} />
+                  <select className="app-input" value={form.unit} onChange={e => setForm({...form,unit:e.target.value})} style={{ width:'100px' }}>
+                    {['pieza','kg','bolsa','litro','docena','caja','manojo'].map(u => <option key={u}>{u}</option>)}
+                  </select>
+                  <input className="app-input" placeholder="Stock" type="number" value={form.stock} onChange={e => setForm({...form,stock:e.target.value})} style={{ width:'75px' }} />
+                  <button style={s.saveBtn} type="submit" disabled={saving}>{editId?'Guardar':'+ Agregar'}</button>
+                  {editId && <button type="button" style={s.cancelBtn} onClick={() => { setEditId(null); setForm({name:'',emoji:'🥑',price:'',unit:'pieza',stock:''}); }}>✕</button>}
+                </div>
+              </form>
+
+              <div style={s.prodList}>
+                {currentProducts.length===0 && <p style={s.empty}>Sin productos en esta sede. ¡Agrega uno arriba!</p>}
+                {currentProducts.map(p => (
+                  <div key={p.id} style={s.prodCard}>
+                    <span style={{ fontSize:'1.7rem' }}>{p.emoji}</span>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontWeight:600, fontSize:'0.92rem' }}>{p.name}</div>
+                      <div style={{ fontSize:'0.78rem', color:'#666' }}>
+                        ${p.price}/{p.unit}
+                        {p.stock && <span style={{ marginLeft:'0.5rem', color: parseInt(p.stock)<=3?'#dc2626':'#2d7a2d', fontWeight:600 }}>
+                          · Stock: {p.stock}
+                        </span>}
+                      </div>
+                    </div>
+                    <button style={s.iconBtn} onClick={() => startEdit(p)}>✏️</button>
+                    <button style={s.iconBtn} onClick={() => deleteProduct(p.id)}>🗑️</button>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* PERFIL */}
+        <div style={s.section}>
+          <h3 style={s.sectionTitle}>👤 Perfil de contacto</h3>
+          <form onSubmit={handleSaveProfile} style={{ display:'flex', flexDirection:'column', gap:'0.9rem', marginTop:'0.8rem' }}>
+            <div style={{ display:'flex', flexDirection:'column', gap:'0.3rem' }}>
+              <label style={s.label}>📱 WhatsApp</label>
+              <div style={{ display:'flex', gap:'0.5rem' }}>
+                <select style={s.codeSelect} value={countryCode} onChange={e => setCountryCode(e.target.value)}>
+                  {COUNTRY_CODES.map(c => <option key={c.code} value={c.code}>{c.flag} {c.code} {c.name}</option>)}
+                </select>
+                <input className="app-input" placeholder="3001234567" value={phoneNumber}
+                  onChange={e => setPhoneNumber(e.target.value.replace(/\D/g,''))} style={{ flex:1 }} />
+              </div>
+              {phoneNumber && <p style={{ fontSize:'0.75rem', color:'#888' }}>wa.me/{countryCode.replace('+','')}{phoneNumber}</p>}
+            </div>
+            <div style={{ display:'flex', flexDirection:'column', gap:'0.3rem' }}>
+              <label style={s.label}>📝 Descripción</label>
+              <textarea className="app-input" style={{ minHeight:'60px', resize:'vertical' }}
+                placeholder="Frutas y verduras frescas..." value={description}
+                onChange={e => setDescription(e.target.value)} />
+            </div>
+            <button style={s.saveBtn} type="submit" disabled={savingProfile}>
+              {profileSaved ? '✅ Guardado' : savingProfile ? 'Guardando...' : 'Guardar perfil'}
+            </button>
+          </form>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+const s = {
+  page:       { background:'var(--bg)', minHeight:'calc(100vh - 60px)', padding:'1.5rem 1rem' },
+  container:  { maxWidth:'720px', margin:'0 auto', display:'flex', flexDirection:'column', gap:'1.2rem' },
+  loading:    { padding:'3rem', textAlign:'center', color:'#888' },
+  header:     { display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:'1rem' },
+  headerLeft: { display:'flex', flexDirection:'column', gap:'0.4rem' },
+  backBtn:    { color:'var(--green)', textDecoration:'none', fontSize:'0.85rem', fontWeight:600 },
+  title:      { fontSize:'1.4rem', fontWeight:800, color:'var(--text)', margin:0 },
+  subtitle:   { fontSize:'0.85rem', color:'var(--text-2)', margin:0 },
+  alertBadge: { background:'#fef3c7', color:'#92400e', border:'1px solid #fde68a', padding:'0.5rem 1rem', borderRadius:'20px', fontWeight:700, fontSize:'0.85rem' },
+  section:    { background:'#fff', borderRadius:'var(--radius-lg)', padding:'1.3rem', boxShadow:'var(--shadow-sm)', border:'2px solid transparent' },
+  sectionHead:{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'0.8rem' },
+  sectionTitle:{ fontSize:'1rem', fontWeight:700, color:'var(--text)', margin:0 },
+  empty:      { color:'var(--text-3)', fontSize:'0.85rem', textAlign:'center', padding:'0.6rem 0' },
+
+  /* Pedidos colapsables */
+  orderSection:     { border:'1px solid var(--border)', borderRadius:'var(--radius)', overflow:'hidden' },
+  orderSectionHead: { width:'100%', display:'flex', justifyContent:'space-between', alignItems:'center', padding:'0.75rem 1rem', background:'var(--bg)', border:'none', cursor:'pointer', fontFamily:'inherit', borderLeft:'4px solid #ccc' },
+  groupDot:    { width:'10px', height:'10px', borderRadius:'50%', flexShrink:0 },
+  groupLabel:  { fontWeight:600, fontSize:'0.9rem', color:'var(--text)' },
+  groupCount:  { color:'#fff', fontSize:'0.72rem', fontWeight:700, padding:'0.1rem 0.45rem', borderRadius:'20px' },
+  chevron:     { fontSize:'0.7rem', color:'var(--text-3)' },
+  orderList:   { padding:'0.7rem', display:'flex', flexDirection:'column', gap:'0.6rem', background:'#fff' },
+  orderCard:   { background:'var(--bg)', borderRadius:'var(--radius-sm)', padding:'0.8rem', border:'1px solid var(--border)' },
+  orderHead:   { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'0.4rem', flexWrap:'wrap', gap:'0.3rem' },
+  typePill:    { fontSize:'0.78rem', fontWeight:600, padding:'0.18rem 0.55rem', borderRadius:'20px' },
+  locPill:     { fontSize:'0.75rem', color:'#888', background:'#f3f4f6', padding:'0.1rem 0.4rem', borderRadius:'20px' },
+  statusPill:  { color:'#fff', fontSize:'0.72rem', fontWeight:700, padding:'0.18rem 0.55rem', borderRadius:'20px' },
+  orderProducts:{ display:'flex', flexWrap:'wrap', gap:'0.25rem', margin:'0.35rem 0' },
+  orderProduct: { background:'#fff', border:'1px solid var(--border)', fontSize:'0.78rem', padding:'0.15rem 0.45rem', borderRadius:'20px' },
+  orderMeta:   { fontSize:'0.78rem', color:'var(--text-2)', margin:'0.2rem 0 0' },
+  orderActions:{ display:'flex', gap:'0.5rem', marginTop:'0.5rem' },
+  btnAccept:   { flex:1, background:'var(--green)', color:'#fff', border:'none', padding:'0.5rem 0.7rem', borderRadius:'var(--radius-sm)', cursor:'pointer', fontWeight:600, fontSize:'0.83rem', fontFamily:'inherit' },
+  btnReject:   { background:'#fee2e2', color:'var(--red)', border:'none', padding:'0.5rem 0.7rem', borderRadius:'var(--radius-sm)', cursor:'pointer', fontWeight:700, fontFamily:'inherit' },
+  btnComplete: { marginTop:'0.4rem', width:'100%', background:'var(--green)', color:'#fff', border:'none', padding:'0.45rem', borderRadius:'var(--radius-sm)', cursor:'pointer', fontWeight:600, fontFamily:'inherit' },
+
+  /* Sedes */
+  addLocBtn:  { background:'var(--green-light)', color:'var(--green)', border:'1.5px solid var(--green-border)', padding:'0.4rem 0.9rem', borderRadius:'20px', cursor:'pointer', fontWeight:600, fontSize:'0.83rem', fontFamily:'inherit' },
+  locList:    { display:'flex', flexDirection:'column', gap:'0.5rem', marginBottom:'0.7rem' },
+  locCard:    { background:'var(--bg)', border:'1.5px solid var(--border)', borderRadius:'var(--radius)', padding:'0.75rem', transition:'border-color 0.15s' },
+  locCardActive:{ borderColor:'var(--green)', background:'#f0f7f0' },
+  locRow:     { display:'flex', alignItems:'center', gap:'0.5rem', marginBottom:'0.4rem', flexWrap:'wrap' },
+  locNameInput:{ border:'none', background:'transparent', fontWeight:600, fontSize:'0.92rem', color:'var(--text)', outline:'none', flex:1, minWidth:'100px', fontFamily:'inherit' },
+  locPos:     { fontSize:'0.72rem', color:'var(--text-3)', fontFamily:'monospace' },
+  locActions: { display:'flex', gap:'0.35rem', flexWrap:'wrap' },
+  locBtn:     { fontSize:'0.78rem', padding:'0.28rem 0.55rem', border:'1px solid var(--border)', borderRadius:'20px', cursor:'pointer', background:'var(--bg)', fontFamily:'inherit', fontWeight:500 },
+  locToggleBtn:{ fontSize:'0.78rem', padding:'0.28rem 0.65rem', border:'none', borderRadius:'20px', cursor:'pointer', fontFamily:'inherit', fontWeight:600 },
+  locDeleteBtn:{ fontSize:'0.88rem', padding:'0.28rem 0.4rem', border:'none', background:'none', cursor:'pointer' },
+  mapHint:    { fontSize:'0.78rem', color:'var(--text-2)', margin:'0.3rem 0 0.4rem', fontStyle:'italic' },
+  mapWrap:    { borderRadius:'var(--radius-sm)', overflow:'hidden', border:'1px solid var(--border)' },
+
+  /* Tabs de sedes en productos */
+  locTabs:    { display:'flex', gap:'0.4rem', flexWrap:'wrap', marginBottom:'1rem' },
+  locTab:     { padding:'0.35rem 0.8rem', border:'1.5px solid var(--border)', borderRadius:'20px', background:'var(--bg)', cursor:'pointer', fontSize:'0.82rem', fontWeight:500, fontFamily:'inherit', display:'flex', alignItems:'center', gap:'0.3rem', transition:'all 0.15s' },
+  locTabActive:{ background:'var(--green)', color:'#fff', border:'1.5px solid var(--green)' },
+  onlineDot:  { width:'7px', height:'7px', borderRadius:'50%', background:'#22c55e' },
+
+  /* Productos */
+  emojiRow:    { display:'flex', flexWrap:'wrap', gap:'0.25rem', marginBottom:'0.6rem' },
+  emojiBtn:    { background:'none', border:'2px solid transparent', borderRadius:'6px', fontSize:'1.15rem', cursor:'pointer', padding:'0.15rem' },
+  emojiBtnActive:{ border:'2px solid var(--green)', background:'var(--green-light)' },
+  prodFormRow: { display:'flex', gap:'0.4rem', flexWrap:'wrap', alignItems:'center' },
+  prodList:    { display:'flex', flexDirection:'column', gap:'0.45rem' },
+  prodCard:    { display:'flex', alignItems:'center', gap:'0.6rem', padding:'0.65rem', background:'var(--bg)', borderRadius:'var(--radius-sm)', border:'1px solid var(--border)' },
+  iconBtn:     { background:'none', border:'none', cursor:'pointer', fontSize:'0.95rem', padding:'0.15rem' },
+
+  /* Perfil */
+  label:      { fontSize:'0.82rem', fontWeight:600, color:'var(--text-2)' },
+  codeSelect: { padding:'0.6rem 0.5rem', borderRadius:'var(--radius-sm)', border:'1.5px solid var(--border)', background:'#fff', cursor:'pointer', fontFamily:'inherit' },
+  saveBtn:    { padding:'0.6rem 1.2rem', background:'var(--green)', color:'#fff', border:'none', borderRadius:'var(--radius-sm)', cursor:'pointer', fontWeight:600, fontFamily:'inherit', whiteSpace:'nowrap' },
+  cancelBtn:  { padding:'0.6rem 0.8rem', background:'var(--border)', color:'var(--text)', border:'none', borderRadius:'var(--radius-sm)', cursor:'pointer', fontFamily:'inherit' },
+};

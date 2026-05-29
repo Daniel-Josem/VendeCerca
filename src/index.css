@@ -1,0 +1,187 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --green:        #2d7a2d;
+  --green-dark:   #1a5c1a;
+  --green-mid:    #3d9e3d;
+  --green-light:  #f0f7f0;
+  --green-border: #c6e0c6;
+  --amber:        #f59e0b;
+  --red:          #dc2626;
+  --blue:         #3b82f6;
+  --text:         #111827;
+  --text-2:       #4b5563;
+  --text-3:       #9ca3af;
+  --bg:           #f3f7f3;
+  --card:         #ffffff;
+  --border:       #e5e7eb;
+  --radius-sm:    8px;
+  --radius:       12px;
+  --radius-lg:    18px;
+  --shadow-sm:    0 1px 4px rgba(0,0,0,0.07);
+  --shadow:       0 4px 16px rgba(0,0,0,0.09);
+  --shadow-lg:    0 12px 40px rgba(0,0,0,0.14);
+  --transition:   0.2s cubic-bezier(.4,0,.2,1);
+}
+
+html { font-size: 16px; }
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root { width: 100%; min-height: 100vh; display: flex; flex-direction: column; }
+
+a { color: inherit; }
+button, input, select, textarea { font-family: inherit; }
+
+/* ── SCROLLBAR ───────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--green-border); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: var(--green); }
+
+/* ── KEYFRAMES ───────────────────────────────────── */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; } to { opacity: 1; }
+}
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.94); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+@keyframes ping {
+  0%,100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(1.2); opacity: 0.7; }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── MAPA: MARCADOR PERSONALIZADO ────────────────── */
+.vendor-marker {
+  width: 42px; height: 42px;
+  background: linear-gradient(135deg, var(--green), var(--green-mid));
+  border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+  border: 3px solid #fff;
+  box-shadow: 0 4px 14px rgba(45,122,45,0.45);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 0.15s;
+}
+.vendor-marker:hover { transform: rotate(-45deg) scale(1.15); }
+.vendor-marker-icon { transform: rotate(45deg); font-size: 18px; line-height: 1; }
+
+/* ── MARCADOR DEL COMPRADOR (punto azul pulsante) ── */
+.user-marker {
+  position: relative; width: 24px; height: 24px;
+  display: flex; align-items: center; justify-content: center;
+}
+.user-marker-ring {
+  position: absolute;
+  width: 42px; height: 42px;
+  background: rgba(59,130,246,0.18);
+  border-radius: 50%;
+  animation: userRing 2s ease-out infinite;
+}
+.user-marker-dot {
+  width: 16px; height: 16px;
+  background: #3b82f6;
+  border-radius: 50%;
+  border: 3px solid #fff;
+  box-shadow: 0 2px 10px rgba(59,130,246,0.55);
+  position: relative; z-index: 2;
+}
+@keyframes userRing {
+  0%   { transform: scale(0.6); opacity: 0.8; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+/* Popup del mapa */
+.leaflet-popup-content-wrapper {
+  border-radius: var(--radius) !important;
+  box-shadow: var(--shadow-lg) !important;
+  padding: 0 !important;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.leaflet-popup-content { margin: 0 !important; }
+.leaflet-popup-tip { display: none; }
+
+/* ── INPUTS ──────────────────────────────────────── */
+.app-input {
+  width: 100%; padding: 0.75rem 1rem;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.95rem; background: var(--card);
+  transition: border-color var(--transition), box-shadow var(--transition);
+  outline: none;
+}
+.app-input:focus {
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px rgba(45,122,45,0.12);
+}
+
+/* ── BOTONES ─────────────────────────────────────── */
+.app-btn {
+  padding: 0.75rem 1.5rem; border: none; border-radius: var(--radius-sm);
+  font-weight: 600; font-size: 0.95rem; cursor: pointer;
+  transition: transform var(--transition), box-shadow var(--transition), background var(--transition);
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem;
+}
+.app-btn:hover { transform: translateY(-1px); }
+.app-btn:active { transform: translateY(0); }
+.app-btn-primary { background: var(--green); color: #fff; box-shadow: 0 2px 8px rgba(45,122,45,0.3); }
+.app-btn-primary:hover { background: var(--green-dark); box-shadow: 0 4px 16px rgba(45,122,45,0.4); }
+.app-btn-danger { background: #fee2e2; color: var(--red); }
+.app-btn-danger:hover { background: #fecaca; }
+
+/* ── CARDS ───────────────────────────────────────── */
+.app-card {
+  background: var(--card); border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--transition), transform var(--transition);
+}
+.app-card:hover { box-shadow: var(--shadow); }
+
+/* ── BADGES ──────────────────────────────────────── */
+.badge-green { background: var(--green-light); color: var(--green); font-size: 0.78rem; font-weight: 600; padding: 0.2rem 0.6rem; border-radius: 20px; }
+.badge-amber { background: #fef3c7; color: #92400e; font-size: 0.78rem; font-weight: 600; padding: 0.2rem 0.6rem; border-radius: 20px; }
+.badge-red   { background: #fee2e2; color: var(--red); font-size: 0.78rem; font-weight: 600; padding: 0.2rem 0.6rem; border-radius: 20px; }
+
+/* ── ANIMACIONES DE ENTRADA ──────────────────────── */
+.anim-fade-up   { animation: fadeInUp 0.5s ease both; }
+.anim-fade-in   { animation: fadeIn   0.4s ease both; }
+.anim-slide-in  { animation: slideInLeft 0.4s ease both; }
+.anim-scale-in  { animation: scaleIn  0.35s ease both; }
+
+.delay-1 { animation-delay: 0.08s; }
+.delay-2 { animation-delay: 0.16s; }
+.delay-3 { animation-delay: 0.24s; }
+.delay-4 { animation-delay: 0.32s; }
+.delay-5 { animation-delay: 0.40s; }
+
+/* ── SKELETON LOADER ─────────────────────────────── */
+.skeleton {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 400px 100%;
+  animation: shimmer 1.4s ease infinite;
+  border-radius: var(--radius-sm);
+}
