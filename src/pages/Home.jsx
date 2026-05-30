@@ -211,7 +211,10 @@ export default function Home() {
 
                 {/* Header */}
                 <div style={s.cardHead}>
-                  <div style={s.avatar}>{v.name?.[0]?.toUpperCase()}</div>
+                  {v.photoURL
+                    ? <img src={v.photoURL} alt={v.name} style={s.avatarImg} />
+                    : <div style={s.avatar}>{v.name?.[0]?.toUpperCase()}</div>
+                  }
                   <div style={s.cardInfo}>
                     <div style={s.vendorName}>{v.name}</div>
                     {v.rating > 0 && (
@@ -486,6 +489,7 @@ const s = {
     color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
     fontWeight: 700, fontSize: '1rem',
   },
+  avatarImg: { width:'38px', height:'38px', borderRadius:'50%', objectFit:'cover', flexShrink:0, border:'2px solid var(--border)' },
   cardInfo: { flex: 1, minWidth: 0 },
   vendorName: { fontWeight: 700, fontSize: '0.95rem', color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   rating: { fontSize: '0.78rem', color: '#f59e0b', marginTop: '0.1rem', display: 'flex', alignItems: 'center', gap: '0.2rem' },

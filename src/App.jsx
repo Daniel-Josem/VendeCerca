@@ -7,6 +7,7 @@ import Register from './pages/Register';
 import VendorDashboard from './pages/VendorDashboard';
 import VendorProfile from './pages/VendorProfile';
 import MyOrders from './pages/MyOrders';
+import ForgotPassword from './pages/ForgotPassword';
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="/dashboard" element={<VendorDashboard />} />
           <Route path="/vendor/:id" element={<VendorProfile />} />
           <Route path="/mis-pedidos" element={<MyOrders />} />
+          <Route path="/reset-password" element={<ForgotPassword />} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

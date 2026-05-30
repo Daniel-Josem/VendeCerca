@@ -49,6 +49,9 @@ export default function Login() {
             <input className="app-input" style={s.input} type="password" placeholder="••••••••"
               value={password} onChange={e => setPassword(e.target.value)} required />
           </div>
+          <div style={{ textAlign:'right' }}>
+            <Link to="/reset-password" style={s.forgotLink}>¿Olvidaste tu contraseña?</Link>
+          </div>
           <button style={{ ...s.btn, opacity: loading ? 0.7 : 1 }} type="submit" disabled={loading}>
             {loading ? '⏳ Entrando...' : 'Entrar →'}
           </button>
@@ -78,5 +81,6 @@ const s = {
   input: { background: '#f9fafb' },
   btn: { marginTop: '0.4rem', padding: '0.9rem', background: 'linear-gradient(135deg, #1a5c1a, #2d7a2d)', color: '#fff', border: 'none', borderRadius: '10px', fontSize: '1rem', cursor: 'pointer', fontWeight: 700, transition: 'opacity 0.2s, transform 0.2s', fontFamily: 'inherit' },
   footer: { textAlign: 'center', marginTop: '1.5rem', color: '#6b7280', fontSize: '0.88rem' },
-  link: { color: '#2d7a2d', fontWeight: 700, textDecoration: 'none' },
+  link:       { color:'#2d7a2d', fontWeight:700, textDecoration:'none' },
+  forgotLink: { color:'#6b7280', fontSize:'0.82rem', textDecoration:'none' },
 };

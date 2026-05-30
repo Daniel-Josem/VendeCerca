@@ -118,8 +118,15 @@ export default function VendorDashboard() {
   const navigate = useNavigate();
 
   const [vendor,        setVendor]        = useState(null);
+  const [photoURL,      setPhotoURL]      = useState(null);
+  const [uploadingPhoto,setUploadingPhoto]= useState(false);
+  const [avatarHover,   setAvatarHover]   = useState(false);
+  const photoInputRef   = useRef(null);
   const [orders,        setOrders]        = useState([]);
   const [locations,     setLocations]     = useState([]);
+  const [notifPerm,     setNotifPerm]     = useState(Notification?.permission || 'default');
+  const seenOrderIds    = useRef(new Set());
+  const isFirstLoad     = useRef(true);
   const [activeLocId,   setActiveLocId]   = useState(null); // sede en mapa
   const [prodLocId,     setProdLocId]     = useState(null); // sede en productos
   const [countryCode,   setCountryCode]   = useState('+57');
@@ -143,6 +150,7 @@ export default function VendorDashboard() {
       if (!snap.exists()) return;
       const d = snap.data();
       setVendor(d);
+      setPhotoURL(d.photoURL || null);
       setCountryCode(d.phoneCode || '+57');
       setPhoneNumber(d.phoneNumber || '');
       setDescription(d.description || '');
@@ -165,12 +173,66 @@ export default function VendorDashboard() {
     });
   }, [currentUser]);
 
+  // ── Pedir permiso de notificaciones al cargar ───
+  useEffect(() => {
+    if (!currentUser || userRole !== 'vendor') return;
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().then(p => setNotifPerm(p));
+    }
+  }, [currentUser, userRole]);
+
+  // ── Sonido de alerta (Web Audio API) ────────────
+  function playAlert() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const notes = [880, 1108, 1320]; // A5 - C#6 - E6 (acorde alegre)
+      notes.forEach((freq, i) => {
+        const osc  = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.15);
+        gain.gain.setValueAtTime(0.25, ctx.currentTime + i * 0.15);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.15 + 0.4);
+        osc.start(ctx.currentTime + i * 0.15);
+        osc.stop(ctx.currentTime + i * 0.15 + 0.4);
+      });
+    } catch (e) { /* navegador sin soporte */ }
+  }
+
+  // ── Notificación del navegador ──────────────────
+  function showNotification(count) {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('VendeCerca — Nuevo pedido 🛵', {
+        body: `Tienes ${count} pedido${count > 1 ? 's' : ''} nuevo${count > 1 ? 's' : ''} esperando`,
+        icon: '/favicon.svg',
+        tag:  'new-order',
+      });
+    }
+  }
+
+  // ── Escuchar pedidos en tiempo real ─────────────
   useEffect(() => {
     if (!currentUser) return;
     const q = query(collection(db, 'orders'), where('vendorId', '==', currentUser.uid));
     return onSnapshot(q, snap => {
       const list = snap.docs.map(d => ({ id:d.id, ...d.data() }));
       list.sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
+
+      if (!isFirstLoad.current) {
+        // Detectar pedidos pendientes que no habíamos visto
+        const newPending = list.filter(o =>
+          o.status === 'pendiente' && !seenOrderIds.current.has(o.id)
+        );
+        if (newPending.length > 0) {
+          playAlert();
+          showNotification(newPending.length);
+        }
+      }
+
+      isFirstLoad.current = false;
+      seenOrderIds.current = new Set(list.map(o => o.id));
       setOrders(list);
     }, err => console.error(err));
   }, [currentUser]);
@@ -273,6 +335,35 @@ export default function VendorDashboard() {
   }
 
   // ── Perfil ───────────────────────────────────────
+  async function handlePhotoChange(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { alert('La foto debe pesar menos de 5MB'); return; }
+
+    setUploadingPhoto(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('upload_preset', 'vendecerca');
+      formData.append('public_id', `vendor_${currentUser.uid}`);
+
+      const res  = await fetch('https://api.cloudinary.com/v1_1/dhjkhvfmf/image/upload', {
+        method: 'POST', body: formData,
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+
+      // URL optimizada: 300x300, circular, formato automático
+      const optimized = data.secure_url.replace('/upload/', '/upload/w_300,h_300,c_fill,f_auto,q_auto/');
+      setPhotoURL(optimized);
+      await updateDoc(doc(db, 'vendors', currentUser.uid), { photoURL: optimized });
+    } catch (err) {
+      alert('Error subiendo la foto. Intenta de nuevo.');
+      console.error(err);
+    }
+    setUploadingPhoto(false);
+  }
+
   async function handleSaveProfile(e) {
     e.preventDefault();
     setSavingProfile(true);
@@ -300,14 +391,44 @@ export default function VendorDashboard() {
         <div style={s.header}>
           <div style={s.headerLeft}>
             <BackButton to="/" label="Volver al mapa" />
-            <div>
-              <h2 style={s.title}>Panel de Vendedor</h2>
-              <p style={s.subtitle}>Hola, {vendor.name} · {onlineCount} sede{onlineCount!==1?'s':''} en línea</p>
+            <div style={{ display:'flex', alignItems:'center', gap:'0.9rem' }}>
+              {/* Avatar con upload */}
+              <div style={s.avatarWrap} onClick={() => photoInputRef.current?.click()}
+                onMouseEnter={() => setAvatarHover(true)} onMouseLeave={() => setAvatarHover(false)}
+                title="Cambiar foto de perfil">
+                {uploadingPhoto ? (
+                  <div style={s.avatarUpload}><span style={s.spinner}>⏳</span></div>
+                ) : photoURL ? (
+                  <img src={photoURL} alt="foto" style={s.avatarImg} />
+                ) : (
+                  <div style={s.avatarPlaceholder}>{vendor.name?.[0]?.toUpperCase()}</div>
+                )}
+                <div style={{ ...s.avatarOverlay, opacity: avatarHover ? 1 : 0 }}>📷</div>
+                <input ref={photoInputRef} type="file" accept="image/*" style={{ display:'none' }} onChange={handlePhotoChange} />
+              </div>
+              <div>
+                <h2 style={s.title}>Panel de Vendedor</h2>
+                <p style={s.subtitle}>Hola, {vendor.name} · {onlineCount} sede{onlineCount!==1?'s':''} en línea</p>
+              </div>
             </div>
           </div>
-          {pendingCount > 0 && (
-            <div style={s.alertBadge}>🔔 {pendingCount} pedido{pendingCount>1?'s':''} nuevo{pendingCount>1?'s':''}</div>
-          )}
+          <div style={s.headerRight}>
+            {pendingCount > 0 && (
+              <div style={s.alertBadge}>🔔 {pendingCount} nuevo{pendingCount>1?'s':''}</div>
+            )}
+            {/* Estado de notificaciones */}
+            {notifPerm === 'granted' ? (
+              <span style={s.notifOn}>🔔 Alertas activas</span>
+            ) : notifPerm === 'denied' ? (
+              <span style={s.notifOff} title="Activa las notificaciones en la configuración del navegador">🔕 Alertas bloqueadas</span>
+            ) : (
+              <button style={s.notifBtn} onClick={() =>
+                Notification.requestPermission().then(p => setNotifPerm(p))
+              }>
+                🔔 Activar alertas
+              </button>
+            )}
+          </div>
         </div>
 
         {/* PEDIDOS COLAPSABLES */}
@@ -476,7 +597,17 @@ const s = {
   backBtn:    { color:'var(--green)', textDecoration:'none', fontSize:'0.85rem', fontWeight:600 },
   title:      { fontSize:'1.4rem', fontWeight:800, color:'var(--text)', margin:0 },
   subtitle:   { fontSize:'0.85rem', color:'var(--text-2)', margin:0 },
-  alertBadge: { background:'#fef3c7', color:'#92400e', border:'1px solid #fde68a', padding:'0.5rem 1rem', borderRadius:'20px', fontWeight:700, fontSize:'0.85rem' },
+  alertBadge: { background:'#fef3c7', color:'#92400e', border:'1px solid #fde68a', padding:'0.4rem 0.8rem', borderRadius:'20px', fontWeight:700, fontSize:'0.82rem' },
+  headerRight:    { display:'flex', flexDirection:'column', alignItems:'flex-end', gap:'0.4rem' },
+  avatarWrap:     { position:'relative', width:'64px', height:'64px', borderRadius:'50%', cursor:'pointer', flexShrink:0, boxShadow:'0 3px 12px rgba(0,0,0,0.15)' },
+  avatarImg:      { width:'64px', height:'64px', borderRadius:'50%', objectFit:'cover', border:'3px solid #fff' },
+  avatarPlaceholder:{ width:'64px', height:'64px', borderRadius:'50%', background:'linear-gradient(135deg,var(--green),var(--green-mid))', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.6rem', fontWeight:800, border:'3px solid #fff' },
+  avatarUpload:   { width:'64px', height:'64px', borderRadius:'50%', background:'#f3f4f6', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.4rem' },
+  avatarOverlay:  { position:'absolute', inset:0, borderRadius:'50%', background:'rgba(0,0,0,0.35)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.2rem', opacity:0, transition:'opacity 0.2s', ':hover':{ opacity:1 } },
+  spinner:        { animation:'spin 1s linear infinite', display:'inline-block' },
+  notifOn:    { fontSize:'0.75rem', color:'#16a34a', fontWeight:600 },
+  notifOff:   { fontSize:'0.75rem', color:'#dc2626', fontWeight:600, cursor:'help' },
+  notifBtn:   { background:'#f0f7f0', color:'var(--green)', border:'1.5px solid var(--green-border)', padding:'0.35rem 0.8rem', borderRadius:'20px', fontSize:'0.78rem', fontWeight:600, cursor:'pointer', fontFamily:'inherit' },
   section:    { background:'#fff', borderRadius:'var(--radius-lg)', padding:'1.3rem', boxShadow:'var(--shadow-sm)', border:'2px solid transparent' },
   sectionHead:{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'0.8rem' },
   sectionTitle:{ fontSize:'1rem', fontWeight:700, color:'var(--text)', margin:0 },
