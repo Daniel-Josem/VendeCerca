@@ -1,10 +1,11 @@
 import { useEffect, useState, useRef } from 'react';
-import { doc, getDoc, updateDoc, collection, query, where, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, query, where, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import BackButton from '../components/BackButton';
 import { v4 as uuidv4 } from 'uuid';
+import { useToast } from '../context/ToastContext';
 import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -116,6 +117,7 @@ function OrderSection({ group, orders, onUpdateStatus }) {
 export default function VendorDashboard() {
   const { currentUser, userRole } = useAuth();
   const navigate = useNavigate();
+  const toast    = useToast();
 
   const [vendor,        setVendor]        = useState(null);
   const [photoURL,      setPhotoURL]      = useState(null);
@@ -132,9 +134,11 @@ export default function VendorDashboard() {
   const [countryCode,   setCountryCode]   = useState('+57');
   const [phoneNumber,   setPhoneNumber]   = useState('');
   const [description,   setDescription]  = useState('');
-  const [form,          setForm]          = useState({ name:'', emoji:'🥑', price:'', unit:'pieza', stock:'' });
-  const [editId,        setEditId]        = useState(null);
-  const [saving,        setSaving]        = useState(false);
+  const [form,           setForm]           = useState({ name:'', emoji:'🥑', price:'', unit:'pieza', stock:'', imageURL:'' });
+  const [editId,         setEditId]         = useState(null);
+  const [saving,         setSaving]         = useState(false);
+  const [uploadingProd,  setUploadingProd]  = useState(false);
+  const prodImgRef = useRef(null);
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileSaved,  setProfileSaved]  = useState(false);
   const [gpsMsg,        setGpsMsg]        = useState('');
@@ -304,16 +308,36 @@ export default function VendorDashboard() {
       : [...currentProducts, {...form, id:uuidv4()}];
     setEditId(null);
     await saveProducts(newProducts);
-    setForm({ name:'', emoji:'🥑', price:'', unit:'pieza', stock:'' });
+    setForm({ name:'', emoji:'🥑', price:'', unit:'pieza', stock:'', imageURL:'' });
     setSaving(false);
   }
 
   async function deleteProduct(id) { await saveProducts(currentProducts.filter(p => p.id!==id)); }
-  function startEdit(p) { setForm({ name:p.name, emoji:p.emoji, price:p.price, unit:p.unit, stock:p.stock }); setEditId(p.id); }
+  function startEdit(p) { setForm({ name:p.name, emoji:p.emoji, price:p.price, unit:p.unit, stock:p.stock, imageURL:p.imageURL||'' }); setEditId(p.id); }
+
+  async function handleProdImageChange(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { toast.error('La imagen debe pesar menos de 5MB'); return; }
+    setUploadingProd(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('upload_preset', 'vendecerca');
+      const res  = await fetch('https://api.cloudinary.com/v1_1/dhjkhvfmf/image/upload', { method:'POST', body:fd });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+      const url = data.secure_url.replace('/upload/', '/upload/w_400,h_400,c_fill,f_auto,q_auto/');
+      setForm(prev => ({ ...prev, imageURL: url }));
+    } catch {
+      toast.error('Error subiendo la imagen. Intenta de nuevo.');
+    }
+    setUploadingProd(false);
+  }
 
   // ── Pedidos ──────────────────────────────────────
   async function updateOrderStatus(orderId, newStatus) {
-    await updateDoc(doc(db, 'orders', orderId), { status:newStatus });
+    await updateDoc(doc(db, 'orders', orderId), { status:newStatus, updatedAt:serverTimestamp() });
     if (newStatus==='en_camino'||newStatus==='listo') {
       const order = orders.find(o => o.id===orderId);
       if (order?.products?.length) {
@@ -338,7 +362,7 @@ export default function VendorDashboard() {
   async function handlePhotoChange(e) {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 5 * 1024 * 1024) { alert('La foto debe pesar menos de 5MB'); return; }
+    if (file.size > 5 * 1024 * 1024) { toast.error('La foto debe pesar menos de 5MB'); return; }
 
     setUploadingPhoto(true);
     try {
@@ -357,8 +381,9 @@ export default function VendorDashboard() {
       const optimized = data.secure_url.replace('/upload/', '/upload/w_300,h_300,c_fill,f_auto,q_auto/');
       setPhotoURL(optimized);
       await updateDoc(doc(db, 'vendors', currentUser.uid), { photoURL: optimized });
+      toast.success('Foto de perfil actualizada');
     } catch (err) {
-      alert('Error subiendo la foto. Intenta de nuevo.');
+      toast.error('Error subiendo la foto. Intenta de nuevo.');
       console.error(err);
     }
     setUploadingPhoto(false);
@@ -372,8 +397,7 @@ export default function VendorDashboard() {
       phone: countryCode.replace('+','') + phoneNumber, description,
     });
     setSavingProfile(false);
-    setProfileSaved(true);
-    setTimeout(() => setProfileSaved(false), 2500);
+    toast.success('Perfil guardado correctamente');
   }
 
   if (!vendor) return <div style={s.loading}>Cargando...</div>;
@@ -382,6 +406,25 @@ export default function VendorDashboard() {
   const mapCenter   = activeLoc?.lat ? [activeLoc.lat, activeLoc.lng] : [4.7109, -74.0721];
   const pendingCount = orders.filter(o => o.status==='pendiente').length;
   const onlineCount  = locations.filter(l => l.isOnline).length;
+
+  // ── Cálculo de estadísticas ──────────────────────
+  const todayStart = new Date(new Date().setHours(0,0,0,0)).getTime() / 1000;
+  const weekStart  = new Date(Date.now() - 6 * 86400 * 1000).getTime() / 1000;
+  function sumRevenue(list) {
+    return list.reduce((sum, o) => sum + (o.products||[]).reduce((s,p)=>s+(parseFloat(p.price)||0)*(p.qty||1),0), 0);
+  }
+  const completed    = orders.filter(o => o.status === 'completado');
+  const todayAll     = orders.filter(o => (o.createdAt?.seconds||0) >= todayStart);
+  const weekAll      = orders.filter(o => (o.createdAt?.seconds||0) >= weekStart);
+  const todayRevenue = sumRevenue(completed.filter(o => (o.createdAt?.seconds||0) >= todayStart));
+  const weekRevenue  = sumRevenue(completed.filter(o => (o.createdAt?.seconds||0) >= weekStart));
+  const totalRevenue = sumRevenue(completed);
+  const prodMap = {};
+  completed.forEach(o => (o.products||[]).forEach(p => {
+    if (!prodMap[p.name]) prodMap[p.name] = { name:p.name, emoji:p.emoji||'🏆', count:0 };
+    prodMap[p.name].count += (p.qty||1);
+  }));
+  const topProd = Object.values(prodMap).sort((a,b) => b.count - a.count)[0];
 
   return (
     <div style={s.page}>
@@ -429,6 +472,54 @@ export default function VendorDashboard() {
               </button>
             )}
           </div>
+        </div>
+
+        {/* ESTADÍSTICAS */}
+        <div style={s.section}>
+          <h3 style={{ ...s.sectionTitle, marginBottom:'1rem' }}>📊 Estadísticas</h3>
+          <div style={s.statsGrid}>
+            <div style={s.statCard}>
+              <div style={s.statIcon}>📦</div>
+              <div style={s.statVal}>{todayAll.length}</div>
+              <div style={s.statLabel}>Pedidos hoy</div>
+            </div>
+            <div style={s.statCard}>
+              <div style={s.statIcon}>💰</div>
+              <div style={{ ...s.statVal, fontSize: todayRevenue > 99999 ? '1rem' : '1.3rem' }}>
+                ${todayRevenue.toLocaleString()}
+              </div>
+              <div style={s.statLabel}>Ingresos hoy</div>
+            </div>
+            <div style={s.statCard}>
+              <div style={s.statIcon}>📅</div>
+              <div style={s.statVal}>{weekAll.length}</div>
+              <div style={s.statLabel}>Últimos 7 días</div>
+            </div>
+            <div style={s.statCard}>
+              <div style={s.statIcon}>💳</div>
+              <div style={{ ...s.statVal, fontSize: weekRevenue > 99999 ? '1rem' : '1.3rem' }}>
+                ${weekRevenue.toLocaleString()}
+              </div>
+              <div style={s.statLabel}>Ingresos semana</div>
+            </div>
+            <div style={s.statCard}>
+              <div style={s.statIcon}>⭐</div>
+              <div style={s.statVal}>{vendor.rating ? vendor.rating.toFixed(1) : '—'}</div>
+              <div style={s.statLabel}>{vendor.ratingsCount || 0} reseña{(vendor.ratingsCount||0)!==1?'s':''}</div>
+            </div>
+            <div style={s.statCard}>
+              <div style={s.statIcon}>{topProd?.emoji || '🏆'}</div>
+              <div style={{ ...s.statVal, fontSize:'0.88rem', lineHeight:1.3 }}>{topProd?.name || '—'}</div>
+              <div style={s.statLabel}>Producto estrella</div>
+            </div>
+          </div>
+          {totalRevenue > 0 && (
+            <div style={s.totalRevBanner}>
+              💰 Ingresos totales:
+              <strong style={{ color:'var(--green)', fontSize:'1.05rem' }}>${totalRevenue.toLocaleString()}</strong>
+              <span style={{ color:'var(--text-3)', fontSize:'0.78rem' }}>({completed.length} pedido{completed.length!==1?'s':''} completado{completed.length!==1?'s':''})</span>
+            </div>
+          )}
         </div>
 
         {/* PEDIDOS COLAPSABLES */}
@@ -521,6 +612,24 @@ export default function VendorDashboard() {
                       style={{ ...s.emojiBtn, ...(form.emoji===e?s.emojiBtnActive:{}) }}>{e}</button>
                   ))}
                 </div>
+
+                {/* Foto del producto */}
+                <div style={s.prodImgRow}>
+                  <div style={s.prodImgPreview} onClick={() => prodImgRef.current?.click()}>
+                    {uploadingProd ? (
+                      <span style={{ fontSize:'0.75rem', color:'#888' }}>Subiendo...</span>
+                    ) : form.imageURL ? (
+                      <img src={form.imageURL} alt="producto" style={s.prodImgThumb} />
+                    ) : (
+                      <span style={{ fontSize:'0.75rem', color:'#9ca3af', textAlign:'center', lineHeight:1.3 }}>📷<br/>Foto</span>
+                    )}
+                    <input ref={prodImgRef} type="file" accept="image/*" style={{ display:'none' }} onChange={handleProdImageChange} />
+                  </div>
+                  {form.imageURL && (
+                    <button type="button" style={s.removeProdImg} onClick={() => setForm({...form, imageURL:''})}>✕ Quitar foto</button>
+                  )}
+                </div>
+
                 <div style={s.prodFormRow}>
                   <input className="app-input" placeholder="Nombre del producto" value={form.name} onChange={e => setForm({...form,name:e.target.value})} required style={{ flex:2,minWidth:'120px' }} />
                   <input className="app-input" placeholder="Precio $" type="number" value={form.price} onChange={e => setForm({...form,price:e.target.value})} style={{ width:'90px' }} />
@@ -528,8 +637,8 @@ export default function VendorDashboard() {
                     {['pieza','kg','bolsa','litro','docena','caja','manojo'].map(u => <option key={u}>{u}</option>)}
                   </select>
                   <input className="app-input" placeholder="Stock" type="number" value={form.stock} onChange={e => setForm({...form,stock:e.target.value})} style={{ width:'75px' }} />
-                  <button style={s.saveBtn} type="submit" disabled={saving}>{editId?'Guardar':'+ Agregar'}</button>
-                  {editId && <button type="button" style={s.cancelBtn} onClick={() => { setEditId(null); setForm({name:'',emoji:'🥑',price:'',unit:'pieza',stock:''}); }}>✕</button>}
+                  <button style={s.saveBtn} type="submit" disabled={saving || uploadingProd}>{editId?'Guardar':'+ Agregar'}</button>
+                  {editId && <button type="button" style={s.cancelBtn} onClick={() => { setEditId(null); setForm({name:'',emoji:'🥑',price:'',unit:'pieza',stock:'',imageURL:''}); }}>✕</button>}
                 </div>
               </form>
 
@@ -537,7 +646,10 @@ export default function VendorDashboard() {
                 {currentProducts.length===0 && <p style={s.empty}>Sin productos en esta sede. ¡Agrega uno arriba!</p>}
                 {currentProducts.map(p => (
                   <div key={p.id} style={s.prodCard}>
-                    <span style={{ fontSize:'1.7rem' }}>{p.emoji}</span>
+                    {p.imageURL
+                      ? <img src={p.imageURL} alt={p.name} style={s.prodCardImg} />
+                      : <span style={{ fontSize:'1.7rem', width:'44px', textAlign:'center' }}>{p.emoji}</span>
+                    }
                     <div style={{ flex:1 }}>
                       <div style={{ fontWeight:600, fontSize:'0.92rem' }}>{p.name}</div>
                       <div style={{ fontSize:'0.78rem', color:'#666' }}>
@@ -662,11 +774,30 @@ const s = {
   prodFormRow: { display:'flex', gap:'0.4rem', flexWrap:'wrap', alignItems:'center' },
   prodList:    { display:'flex', flexDirection:'column', gap:'0.45rem' },
   prodCard:    { display:'flex', alignItems:'center', gap:'0.6rem', padding:'0.65rem', background:'var(--bg)', borderRadius:'var(--radius-sm)', border:'1px solid var(--border)' },
+  prodCardImg: { width:'44px', height:'44px', borderRadius:'8px', objectFit:'cover', flexShrink:0, border:'1px solid var(--border)' },
   iconBtn:     { background:'none', border:'none', cursor:'pointer', fontSize:'0.95rem', padding:'0.15rem' },
+  prodImgRow:  { display:'flex', alignItems:'center', gap:'0.7rem', marginBottom:'0.6rem' },
+  prodImgPreview: {
+    width:'64px', height:'64px', borderRadius:'10px',
+    border:'2px dashed var(--border)', display:'flex', flexDirection:'column',
+    alignItems:'center', justifyContent:'center', cursor:'pointer',
+    background:'var(--bg)', overflow:'hidden', flexShrink:0,
+    transition:'border-color 0.15s',
+  },
+  prodImgThumb: { width:'100%', height:'100%', objectFit:'cover' },
+  removeProdImg: { fontSize:'0.75rem', color:'var(--red)', background:'#fee2e2', border:'none', padding:'0.25rem 0.6rem', borderRadius:'20px', cursor:'pointer', fontFamily:'inherit' },
 
   /* Perfil */
   label:      { fontSize:'0.82rem', fontWeight:600, color:'var(--text-2)' },
   codeSelect: { padding:'0.6rem 0.5rem', borderRadius:'var(--radius-sm)', border:'1.5px solid var(--border)', background:'#fff', cursor:'pointer', fontFamily:'inherit' },
   saveBtn:    { padding:'0.6rem 1.2rem', background:'var(--green)', color:'#fff', border:'none', borderRadius:'var(--radius-sm)', cursor:'pointer', fontWeight:600, fontFamily:'inherit', whiteSpace:'nowrap' },
   cancelBtn:  { padding:'0.6rem 0.8rem', background:'var(--border)', color:'var(--text)', border:'none', borderRadius:'var(--radius-sm)', cursor:'pointer', fontFamily:'inherit' },
+
+  /* Estadísticas */
+  statsGrid:      { display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(130px, 1fr))', gap:'0.65rem', marginBottom:'0.8rem' },
+  statCard:       { background:'var(--bg)', borderRadius:'var(--radius)', padding:'0.9rem 0.6rem', border:'1px solid var(--border)', display:'flex', flexDirection:'column', alignItems:'center', gap:'0.25rem', textAlign:'center' },
+  statIcon:       { fontSize:'1.3rem', lineHeight:1 },
+  statVal:        { fontSize:'1.3rem', fontWeight:800, color:'var(--text)', lineHeight:1 },
+  statLabel:      { fontSize:'0.72rem', color:'var(--text-3)', fontWeight:500 },
+  totalRevBanner: { background:'#f0fdf4', border:'1px solid #bbf7d0', borderRadius:'var(--radius-sm)', padding:'0.65rem 0.9rem', fontSize:'0.88rem', color:'var(--text-2)', display:'flex', alignItems:'center', gap:'0.5rem', flexWrap:'wrap' },
 };

@@ -7,6 +7,8 @@ import 'leaflet/dist/leaflet.css';
 import { Link } from 'react-router-dom';
 import OrderModal from '../components/OrderModal';
 import { useAuth } from '../context/AuthContext';
+import useIsMobile from '../hooks/useIsMobile';
+import useFavorites from '../hooks/useFavorites';
 
 // Ícono personalizado verde
 function makeVendorIcon(emoji = '🏪') {
@@ -42,16 +44,27 @@ function MapController({ mapRef }) {
   return null;
 }
 
+// Recalcula el tamaño del mapa cuando se vuelve visible (fix Leaflet display:none)
+function InvalidateSize({ active }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!active) return;
+    const t = setTimeout(() => map.invalidateSize(), 50);
+    return () => clearTimeout(t);
+  }, [active, map]);
+  return null;
+}
+
 // Centra el mapa en el usuario la primera vez que llega la posición
-function AutoCenter({ userPos }) {
+function AutoCenter({ userPos, active }) {
   const map = useMap();
   const done = useRef(false);
   useEffect(() => {
-    if (userPos && !done.current) {
+    if (userPos && !done.current && active) {
       map.flyTo([userPos.lat, userPos.lng], 15, { duration: 1.5 });
       done.current = true;
     }
-  }, [userPos, map]);
+  }, [userPos, active, map]);
   return null;
 }
 
@@ -68,21 +81,51 @@ function distStyle(d) {
   return               { bg:'#fff1f2', color:'#e11d48', label:'🔴' };
 }
 
+const SORT_OPTS   = [{ val:'dist', label:'🏃 Cercanos' }, { val:'rating', label:'⭐ Mejor nota' }, { val:'name', label:'🔤 A-Z' }];
+const RATING_OPTS = [{ val:4, label:'⭐ 4+' }, { val:3, label:'⭐ 3+' }];
+const DIST_OPTS   = [{ val:0.5, label:'500m' }, { val:1, label:'1 km' }, { val:3, label:'3 km' }];
+
 export default function Home() {
-  const { currentUser } = useAuth();
+  const { currentUser, userRole } = useAuth();
+  const isMobile = useIsMobile();
+  const { favorites, toggleFavorite } = useFavorites();
   const [vendors, setVendors]           = useState([]);
   const [search, setSearch]             = useState('');
   const [userPos, setUserPos]           = useState(null);
   const [selectedVendor, setSelected]   = useState(null);
   const [orderModal, setOrderModal]     = useState(null);
   const [mapReady, setMapReady]         = useState(false);
-  const mapRef     = useRef(null);
-  const markerRefs = useRef({});
+  const [activeView, setActiveView]     = useState('list');
+  const mapRef        = useRef(null);
+  const markerRefs    = useRef({});
+  const pendingFlyRef = useRef(null);
+  const [filterRating, setFilterRating] = useState(0);
+  const [filterDist,   setFilterDist]   = useState(0);
+  const [sortBy,       setSortBy]       = useState('dist');
 
   function flyToSede(v, loc) {
     if (!mapRef.current || !loc.lat) return;
     mapRef.current.flyTo([loc.lat, loc.lng], 17, { duration: 1.2 });
     setTimeout(() => markerRefs.current[`${v.id}-${loc.id}`]?.openPopup(), 1300);
+  }
+
+  // Ejecuta el fly pendiente cuando el mapa se vuelve visible
+  useEffect(() => {
+    if (activeView !== 'map' || !pendingFlyRef.current) return;
+    const { v, loc } = pendingFlyRef.current;
+    pendingFlyRef.current = null;
+    const t = setTimeout(() => flyToSede(v, loc), 120);
+    return () => clearTimeout(t);
+  }, [activeView]);
+
+  function goToVendorOnMap(e, v) {
+    e.stopPropagation();
+    const onlineLocs = v.locations?.filter(l => l.isOnline && l.lat) || [];
+    const loc = onlineLocs[0] || (v.location?.lat ? { id: 'main', ...v.location } : null);
+    if (!loc) return;
+    setSelected(v);
+    pendingFlyRef.current = { v, loc };
+    setActiveView('map');
   }
 
   useEffect(() => {
@@ -103,13 +146,15 @@ export default function Home() {
     .filter(v => {
       const hasOnline = v.locations?.some(l => l.isOnline) || v.isOnline;
       if (!hasOnline) return false;
-      if (!search) return true;
-      const q = search.toLowerCase();
-      const allProds = v.locations?.flatMap(l => l.products || []) || v.products || [];
-      return v.name?.toLowerCase().includes(q) || allProds.some(p => p.name?.toLowerCase().includes(q));
+      if (search) {
+        const q = search.toLowerCase();
+        const allProds = v.locations?.flatMap(l => l.products || []) || v.products || [];
+        if (!v.name?.toLowerCase().includes(q) && !allProds.some(p => p.name?.toLowerCase().includes(q))) return false;
+      }
+      if (filterRating > 0 && (v.rating || 0) < filterRating) return false;
+      return true;
     })
     .map(v => {
-      // Distancia a la sede online más cercana
       let distance = null;
       if (userPos) {
         const onlineLocs = v.locations?.filter(l => l.isOnline && l.lat) || [];
@@ -121,29 +166,50 @@ export default function Home() {
       }
       return { ...v, distance };
     })
-    .sort((a, b) => (a.distance ?? Infinity) - (b.distance ?? Infinity));
+    .filter(v => filterDist > 0 ? (v.distance === null || v.distance <= filterDist) : true)
+    .sort((a, b) => {
+      if (sortBy === 'rating') return (b.rating || 0) - (a.rating || 0);
+      if (sortBy === 'name')   return (a.name || '').localeCompare(b.name || '');
+      return (a.distance ?? Infinity) - (b.distance ?? Infinity);
+    });
 
   function selectVendor(v) {
     if (selectedVendor?.id === v.id) { setSelected(null); return; }
     setSelected(v);
     const onlineLocs = v.locations?.filter(l => l.isOnline && l.lat) || [];
     if (onlineLocs.length === 1) {
-      // Una sola sede: volar directo
+      if (isMobile) setActiveView('map');
       flyToSede(v, onlineLocs[0]);
     } else if (onlineLocs.length === 0 && v.location?.lat) {
-      // Formato antiguo
+      if (isMobile) setActiveView('map');
       mapRef.current?.flyTo([v.location.lat, v.location.lng], 17, { duration: 1.2 });
     }
-    // Múltiples sedes: el usuario elige desde la tarjeta expandida
   }
 
   const waUrl = (v) => v.phone ? `https://wa.me/${v.phone.replace(/\D/g, '')}` : null;
   const mapCenter = userPos ? [userPos.lat, userPos.lng] : [4.7109, -74.0721];
 
+  const mobileHeight = 'calc(100vh - 60px - 56px)';
+  const desktopHeight = 'calc(100vh - 60px)';
+
   return (
-    <div style={s.container}>
+    <div style={{
+      ...s.container,
+      flexDirection: isMobile ? 'column' : 'row',
+      height: isMobile ? mobileHeight : desktopHeight,
+    }}>
       {/* ── SIDEBAR ── */}
-      <aside style={s.sidebar}>
+      <aside style={{
+        ...s.sidebar,
+        width: isMobile ? '100%' : '340px',
+        minWidth: isMobile ? 'unset' : '280px',
+        height: isMobile ? '100%' : desktopHeight,
+        ...(isMobile ? {
+          position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+          zIndex: activeView === 'list' ? 2 : 1,
+          visibility: activeView === 'list' ? 'visible' : 'hidden',
+        } : {}),
+      }}>
         {/* Search */}
         <div style={s.searchWrap}>
           <div style={s.searchInner}>
@@ -161,13 +227,41 @@ export default function Home() {
           </div>
         </div>
 
+        {/* ── FILTROS ── */}
+        <div style={s.filterScroll}>
+          {SORT_OPTS.map(opt => (
+            <button key={opt.val} style={{ ...s.chip, ...(sortBy === opt.val ? s.chipOn : {}) }} onClick={() => setSortBy(opt.val)}>
+              {opt.label}
+            </button>
+          ))}
+          <div style={s.chipDivider} />
+          {RATING_OPTS.map(opt => (
+            <button key={opt.val} style={{ ...s.chip, ...(filterRating === opt.val ? s.chipOn : {}) }} onClick={() => setFilterRating(filterRating === opt.val ? 0 : opt.val)}>
+              {opt.label}
+            </button>
+          ))}
+          {userPos && <div style={s.chipDivider} />}
+          {userPos && DIST_OPTS.map(opt => (
+            <button key={opt.val} style={{ ...s.chip, ...(filterDist === opt.val ? s.chipOn : {}) }} onClick={() => setFilterDist(filterDist === opt.val ? 0 : opt.val)}>
+              📍 {opt.label}
+            </button>
+          ))}
+          {(filterRating > 0 || filterDist > 0) && (
+            <button style={s.clearFiltersBtn} onClick={() => { setFilterRating(0); setFilterDist(0); }}>
+              ✕
+            </button>
+          )}
+        </div>
+
         {/* Count */}
         <div style={s.countRow}>
           <span style={s.countDot} />
           <span style={s.countText}>
             {filtered.length} vendedor{filtered.length !== 1 ? 'es' : ''}
             {search ? ` con "${search}"` : ' en línea'}
-            {userPos && filtered.length > 0 ? ' · por distancia' : ''}
+            {sortBy === 'dist'   && userPos && filtered.length > 0 ? ' · por distancia' : ''}
+            {sortBy === 'rating' && filtered.length > 0 ? ' · mejor calificados' : ''}
+            {sortBy === 'name'   && filtered.length > 0 ? ' · A-Z' : ''}
           </span>
         </div>
 
@@ -233,6 +327,15 @@ export default function Home() {
                       </span>
                     </div>
                   )}
+                  {currentUser && userRole !== 'vendor' && (
+                    <button
+                      style={{ ...s.favBtn, ...(favorites.has(v.id) ? s.favBtnOn : {}) }}
+                      onClick={e => { e.stopPropagation(); toggleFavorite(v.id); }}
+                      title={favorites.has(v.id) ? 'Quitar de favoritos' : 'Guardar favorito'}
+                    >
+                      {favorites.has(v.id) ? '❤️' : '🤍'}
+                    </button>
+                  )}
                 </div>
 
                 {/* Productos que coinciden con búsqueda (resaltados) */}
@@ -261,6 +364,13 @@ export default function Home() {
                   );
                 })()}
 
+                {/* Botón ver en mapa (solo mobile) */}
+                {isMobile && (
+                  <button style={s.verMapaBtn} onClick={e => goToVendorOnMap(e, v)}>
+                    🗺️ Ver en mapa
+                  </button>
+                )}
+
                 {/* Expanded */}
                 {isSelected && (
                   <div style={s.expanded} onClick={e => e.stopPropagation()} className="anim-fade-in">
@@ -287,7 +397,14 @@ export default function Home() {
                                       <span style={s.sedeName}>📍 {loc.name}</span>
                                       {dist !== null && <span style={s.sedeDist}>{formatDist(dist)}</span>}
                                     </div>
-                                    <button style={s.sedeMapBtn} onClick={() => flyToSede(v, loc)}>
+                                    <button style={s.sedeMapBtn} onClick={() => {
+                                      if (isMobile) {
+                                        pendingFlyRef.current = { v, loc };
+                                        setActiveView('map');
+                                      } else {
+                                        flyToSede(v, loc);
+                                      }
+                                    }}>
                                       Ver en mapa →
                                     </button>
                                   </div>
@@ -324,7 +441,13 @@ export default function Home() {
                             <div style={s.productTable}>
                               {prods.map((p,i) => (
                                 <div key={i} style={s.productTableRow}>
-                                  <span>{p.emoji} {p.name}</span>
+                                  <span style={{ display:'flex', alignItems:'center', gap:'0.4rem' }}>
+                                    {p.imageURL
+                                      ? <img src={p.imageURL} alt={p.name} style={{ width:'28px', height:'28px', borderRadius:'6px', objectFit:'cover', flexShrink:0 }} />
+                                      : <span>{p.emoji}</span>
+                                    }
+                                    {p.name}
+                                  </span>
                                   <div style={{ display:'flex', alignItems:'center', gap:'0.4rem' }}>
                                     {p.stock && parseInt(p.stock) <= 5 && parseInt(p.stock) > 0 && <span style={s.lowStock}>¡Solo {p.stock}!</span>}
                                     {p.stock === '0' && <span style={s.outStock}>Agotado</span>}
@@ -350,11 +473,18 @@ export default function Home() {
       </aside>
 
       {/* ── MAPA ── */}
-      <div style={s.mapWrap}>
+      <div style={{
+        ...s.mapWrap,
+        height: isMobile ? '100%' : desktopHeight,
+        ...(isMobile ? {
+          position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+          zIndex: activeView === 'map' ? 2 : 1,
+        } : {}),
+      }}>
         {/* Botón flotante para centrar en el usuario */}
         {userPos && (
           <button
-            style={s.centerBtn}
+            style={{ ...s.centerBtn, bottom: isMobile ? 'calc(56px + 1.8rem)' : '1.5rem' }}
             onClick={() => mapRef.current?.flyTo([userPos.lat, userPos.lng], 16, { duration: 1 })}
             title="Centrar en mi ubicación"
           >
@@ -372,7 +502,8 @@ export default function Home() {
             attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/attributions">CARTO</a>'
           />
           <MapController mapRef={mapRef} />
-          <AutoCenter userPos={userPos} />
+          <InvalidateSize active={!isMobile || activeView === 'map'} />
+          <AutoCenter userPos={userPos} active={!isMobile || activeView === 'map'} />
 
           {/* Marcador del comprador */}
           {userPos && (
@@ -433,6 +564,29 @@ export default function Home() {
         )}
       </div>
 
+      {/* ── TAB BAR MOBILE ── */}
+      {isMobile && (
+        <div style={s.tabBar}>
+          <button
+            style={{ ...s.tabBtn, ...(activeView === 'list' ? s.tabBtnActive : {}) }}
+            onClick={() => setActiveView('list')}
+          >
+            <span style={s.tabIcon}>📋</span>
+            <span>Lista</span>
+            {filtered.length > 0 && activeView !== 'list' && (
+              <span style={s.tabCount}>{filtered.length}</span>
+            )}
+          </button>
+          <button
+            style={{ ...s.tabBtn, ...(activeView === 'map' ? s.tabBtnActive : {}) }}
+            onClick={() => setActiveView('map')}
+          >
+            <span style={s.tabIcon}>🗺️</span>
+            <span>Mapa</span>
+          </button>
+        </div>
+      )}
+
       {orderModal && (
         <OrderModal
           vendor={orderModal.vendor}
@@ -446,13 +600,36 @@ export default function Home() {
 }
 
 const s = {
-  container: { display: 'flex', height: 'calc(100vh - 60px)', background: 'var(--bg)' },
+  container: { display: 'flex', background: 'var(--bg)', position: 'relative', overflow: 'hidden' },
 
   /* Sidebar */
   sidebar: {
     width: '340px', minWidth: '280px', display: 'flex', flexDirection: 'column',
     background: '#fff', borderRight: '1px solid var(--border)',
     overflow: 'hidden',
+  },
+
+  /* Tab bar mobile */
+  tabBar: {
+    position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 1002,
+    display: 'flex', height: '56px',
+    background: '#fff', borderTop: '1px solid var(--border)',
+    boxShadow: '0 -4px 16px rgba(0,0,0,0.08)',
+  },
+  tabBtn: {
+    flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
+    justifyContent: 'center', gap: '0.1rem',
+    background: 'none', border: 'none', cursor: 'pointer',
+    color: '#9ca3af', fontSize: '0.7rem', fontWeight: 600,
+    fontFamily: 'inherit', transition: 'color 0.15s', position: 'relative',
+  },
+  tabBtnActive: { color: 'var(--green)' },
+  tabIcon: { fontSize: '1.2rem', lineHeight: 1 },
+  tabCount: {
+    position: 'absolute', top: '4px', right: 'calc(50% - 18px)',
+    background: '#ef4444', color: '#fff', fontSize: '0.6rem',
+    fontWeight: 700, padding: '0.1rem 0.3rem', borderRadius: '20px',
+    minWidth: '16px', textAlign: 'center', lineHeight: 1.5,
   },
   searchWrap: { padding: '0.9rem 0.9rem 0.5rem' },
   searchInner: { position: 'relative', display: 'flex', alignItems: 'center' },
@@ -498,7 +675,14 @@ const s = {
   nearestBadge: { background:'linear-gradient(135deg,#fef3c7,#fde68a)', color:'#92400e', fontSize:'0.75rem', fontWeight:700, padding:'0.25rem 0.7rem', borderRadius:'20px', marginBottom:'0.4rem', display:'inline-block', border:'1px solid #fcd34d' },
   matchRow: { display:'flex', flexWrap:'wrap', gap:'0.3rem', margin:'0.1rem 0' },
   matchTag: { background:'#f0fdf4', color:'#166534', fontSize:'0.78rem', padding:'0.22rem 0.55rem', borderRadius:'20px', border:'1px solid #bbf7d0', fontWeight:500 },
-  tagRow: { display: 'flex', flexWrap: 'wrap', gap: '0.25rem' },
+  tagRow: { display: 'flex', flexWrap: 'wrap', gap: '0.25rem', marginBottom: '0.4rem' },
+  verMapaBtn: {
+    width: '100%', marginTop: '0.45rem',
+    padding: '0.5rem', background: 'var(--green-light)',
+    color: 'var(--green)', border: '1.5px solid var(--green-border)',
+    borderRadius: 'var(--radius-sm)', fontWeight: 700, fontSize: '0.85rem',
+    cursor: 'pointer', fontFamily: 'inherit', transition: 'background 0.15s',
+  },
   tag: { background: 'var(--bg)', color: 'var(--text-2)', fontSize: '0.75rem', padding: '0.18rem 0.5rem', borderRadius: '20px', border: '1px solid var(--border)' },
   tagMore: { background: 'var(--green-light)', color: 'var(--green)', fontSize: '0.75rem', padding: '0.18rem 0.5rem', borderRadius: '20px', fontWeight: 600 },
 
@@ -528,7 +712,7 @@ const s = {
   sedeProdRow:  { display:'flex', flexWrap:'wrap', gap:'0.25rem' },
 
   /* Map */
-  mapWrap: { flex: 1, position: 'relative' },
+  mapWrap: { flex: 1, position: 'relative', height: 'calc(100vh - 60px)' },
   centerBtn: {
     position: 'absolute', bottom: '1.5rem', right: '1rem', zIndex: 1000,
     background: '#fff', color: '#3b82f6',
@@ -551,4 +735,15 @@ const s = {
   popupActions: { display: 'flex', gap: '0.5rem', borderTop: '1px solid var(--border)', paddingTop: '0.6rem' },
   popupWA: { background: '#25d366', color: '#fff', textDecoration: 'none', padding: '0.35rem 0.7rem', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 600 },
   popupProfile: { color: 'var(--green)', fontSize: '0.8rem', fontWeight: 600, alignSelf: 'center', textDecoration: 'none' },
+
+  /* Filter bar */
+  filterScroll:    { display:'flex', overflowX:'auto', padding:'0 0.9rem 0.65rem', gap:'0.35rem', scrollbarWidth:'none', msOverflowStyle:'none', WebkitOverflowScrolling:'touch', alignItems:'center' },
+  chip:            { flexShrink:0, padding:'0.28rem 0.65rem', border:'1.5px solid var(--border)', borderRadius:'20px', fontSize:'0.75rem', fontWeight:500, cursor:'pointer', background:'#fff', color:'var(--text-2)', fontFamily:'inherit', transition:'all 0.15s', whiteSpace:'nowrap' },
+  chipOn:          { background:'var(--green)', color:'#fff', borderColor:'var(--green)' },
+  chipDivider:     { width:'1px', height:'20px', background:'var(--border)', flexShrink:0 },
+  clearFiltersBtn: { flexShrink:0, padding:'0.28rem 0.6rem', border:'1.5px solid #fca5a5', borderRadius:'20px', fontSize:'0.75rem', fontWeight:700, cursor:'pointer', background:'#fee2e2', color:'#dc2626', fontFamily:'inherit', whiteSpace:'nowrap' },
+
+  /* Favorite button */
+  favBtn:   { flexShrink:0, width:'30px', height:'30px', border:'1.5px solid var(--border)', borderRadius:'50%', background:'#fff', cursor:'pointer', fontSize:'0.95rem', display:'flex', alignItems:'center', justifyContent:'center', transition:'all 0.15s', fontFamily:'inherit', padding:0 },
+  favBtnOn: { background:'#fff0f0', borderColor:'#fca5a5' },
 };

@@ -3,18 +3,19 @@ import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
 import { useNavigate, Link } from 'react-router-dom';
+import { useToast } from '../context/ToastContext';
 
 export default function Register() {
-  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'buyer' });
-  const [error, setError]   = useState('');
+  const [form, setForm]       = useState({ name: '', email: '', password: '', role: 'buyer' });
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const toast    = useToast();
 
   function handleChange(e) { setForm({ ...form, [e.target.name]: e.target.value }); }
 
   async function handleSubmit(e) {
     e.preventDefault();
-    setError(''); setLoading(true);
+    setLoading(true);
     try {
       const { user } = await createUserWithEmailAndPassword(auth, form.email, form.password);
       await setDoc(doc(db, 'users', user.uid), { name: form.name, email: form.email, role: form.role, createdAt: serverTimestamp() });
@@ -23,7 +24,7 @@ export default function Register() {
         navigate('/dashboard');
       } else { navigate('/'); }
     } catch (err) {
-      setError(err.message.includes('email-already-in-use') ? 'Ese correo ya está registrado' : 'Error al registrarse');
+      toast.error(err.message.includes('email-already-in-use') ? 'Ese correo ya está registrado' : 'Error al registrarse');
     }
     setLoading(false);
   }
@@ -37,8 +38,6 @@ export default function Register() {
         </div>
         <h2 style={s.title}>Crear cuenta</h2>
         <p style={s.sub}>Únete gratis, sin tarjeta de crédito</p>
-
-        {error && <div style={s.errorBox} className="anim-fade-in">⚠️ {error}</div>}
 
         <form onSubmit={handleSubmit} style={s.form}>
           <div style={s.field}>

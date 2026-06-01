@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, getDocs, getDoc, doc } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import BackButton from '../components/BackButton';
+import RatingModal from '../components/RatingModal';
+import OrderModal from '../components/OrderModal';
+import { useToast } from '../context/ToastContext';
 
 const STATUS_COLOR = {
   pendiente:  '#f59e0b',
@@ -21,10 +24,10 @@ const STATUS_LABEL = {
 };
 
 const ORDER_GROUPS = [
-  { key:'pending',   label:'Pendientes',   icon:'🕐', statuses:['pendiente'],          color:'#f59e0b', defaultOpen:true  },
-  { key:'active',    label:'En proceso',   icon:'🔵', statuses:['en_camino','listo'],  color:'#3b82f6', defaultOpen:true  },
-  { key:'completed', label:'Completados',  icon:'✅', statuses:['completado'],         color:'#2d7a2d', defaultOpen:false },
-  { key:'cancelled', label:'Cancelados',   icon:'✕',  statuses:['cancelado'],          color:'#dc2626', defaultOpen:false },
+  { key:'pending',   label:'Pendientes',  icon:'🕐', statuses:['pendiente'],         color:'#f59e0b', defaultOpen:true  },
+  { key:'active',    label:'En proceso',  icon:'🔵', statuses:['en_camino','listo'], color:'#3b82f6', defaultOpen:true  },
+  { key:'completed', label:'Completados', icon:'✅', statuses:['completado'],        color:'#2d7a2d', defaultOpen:true  },
+  { key:'cancelled', label:'Cancelados',  icon:'✕',  statuses:['cancelado'],         color:'#dc2626', defaultOpen:false },
 ];
 
 function formatDate(ts) {
@@ -41,18 +44,14 @@ function calcTotal(products) {
   return (products || []).reduce((sum, p) => sum + (parseFloat(p.price)||0) * (p.qty||1), 0);
 }
 
-// ── Sección colapsable ──────────────────────────────────────
-function OrderSection({ group, orders }) {
+function OrderSection({ group, orders, ratedOrderIds, onRate, onRepeat }) {
   const [open, setOpen] = useState(group.defaultOpen);
   const filtered = orders.filter(o => group.statuses.includes(o.status));
   if (filtered.length === 0) return null;
 
   return (
     <div style={s.section} className="anim-fade-up">
-      <button
-        style={{ ...s.sectionHead, borderLeft:`4px solid ${group.color}` }}
-        onClick={() => setOpen(o => !o)}
-      >
+      <button style={{ ...s.sectionHead, borderLeft:`4px solid ${group.color}` }} onClick={() => setOpen(o => !o)}>
         <div style={s.sectionHeadLeft}>
           <span style={{ ...s.dot, background: group.color }} />
           <span style={s.sectionLabel}>{group.icon} {group.label}</span>
@@ -64,30 +63,31 @@ function OrderSection({ group, orders }) {
       {open && (
         <div style={s.cardList}>
           {filtered.map(order => {
-            const total = calcTotal(order.products);
+            const total   = calcTotal(order.products);
+            const isRated = ratedOrderIds.has(order.id);
+
             return (
               <div key={order.id} style={{ ...s.card, borderLeft:`4px solid ${STATUS_COLOR[order.status]||'#ccc'}` }}>
-                {/* Head */}
                 <div style={s.cardHead}>
                   <div style={s.cardHeadLeft}>
                     <span style={{ ...s.typePill, background: order.type==='domicilio'?'#fef3c7':'#f0f7f0', color: order.type==='domicilio'?'#92400e':'#166534' }}>
                       {order.type==='domicilio' ? '🛵 Domicilio' : '🛒 Retiro'}
                     </span>
                     <strong style={s.vendorName}>{order.vendorName}</strong>
-                    {order.locationName && (
-                      <span style={s.locPill}>📍 {order.locationName}</span>
-                    )}
+                    {order.locationName && <span style={s.locPill}>📍 {order.locationName}</span>}
                   </div>
                   <span style={{ ...s.statusPill, background: STATUS_COLOR[order.status]||'#999' }}>
                     {STATUS_LABEL[order.status]||order.status}
                   </span>
                 </div>
 
-                {/* Productos */}
                 <div style={s.prodGrid}>
                   {order.products?.map((p, i) => (
                     <div key={i} style={s.prodItem}>
-                      <span style={s.prodEmoji}>{p.emoji}</span>
+                      {p.imageURL
+                        ? <img src={p.imageURL} alt={p.name} style={s.prodImg} />
+                        : <span style={s.prodEmoji}>{p.emoji}</span>
+                      }
                       <div>
                         <div style={s.prodName}>{p.name} <span style={s.prodQty}>×{p.qty}</span></div>
                         <div style={s.prodPrice}>${((parseFloat(p.price)||0)*p.qty).toLocaleString()}</div>
@@ -99,17 +99,26 @@ function OrderSection({ group, orders }) {
                 {order.address && <p style={s.meta}>📍 {order.address}</p>}
                 {order.notes   && <p style={s.meta}>📝 {order.notes}</p>}
 
-                {/* Footer */}
                 <div style={s.cardFoot}>
                   <div style={s.dateRow}>
                     <span>📅 {formatDate(order.createdAt)}</span>
                     <span>🕐 {formatTime(order.createdAt)}</span>
                   </div>
-                  {total > 0 && (
-                    <div style={s.totalBox}>
-                      Total <strong style={s.totalAmt}>${total.toLocaleString()}</strong>
-                    </div>
-                  )}
+                  <div style={{ display:'flex', alignItems:'center', gap:'0.5rem', flexWrap:'wrap' }}>
+                    {total > 0 && (
+                      <div style={s.totalBox}>
+                        Total <strong style={s.totalAmt}>${total.toLocaleString()}</strong>
+                      </div>
+                    )}
+                    {(order.status === 'completado' || order.status === 'cancelado') && (
+                      <button style={s.repeatBtn} onClick={() => onRepeat(order)}>🔁 Repetir</button>
+                    )}
+                    {order.status === 'completado' && (
+                      isRated
+                        ? <span style={s.ratedBadge}>⭐ Reseña enviada</span>
+                        : <button style={s.rateBtn} onClick={() => onRate(order)}>⭐ Calificar</button>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -120,12 +129,15 @@ function OrderSection({ group, orders }) {
   );
 }
 
-// ── Página principal ────────────────────────────────────────
 export default function MyOrders() {
-  const { currentUser } = useAuth();
-  const navigate        = useNavigate();
-  const [orders,  setOrders]  = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { currentUser }   = useAuth();
+  const navigate          = useNavigate();
+  const toast             = useToast();
+  const [orders,  setOrders]        = useState([]);
+  const [loading, setLoading]       = useState(true);
+  const [ratingOrder,  setRatingOrder]  = useState(null);
+  const [repeatModal,  setRepeatModal]  = useState(null);
+  const [ratedOrderIds, setRatedOrderIds] = useState(new Set());
 
   useEffect(() => {
     if (!currentUser) { navigate('/login'); return; }
@@ -138,6 +150,27 @@ export default function MyOrders() {
     });
   }, [currentUser, navigate]);
 
+  // Cargar IDs de pedidos ya calificados por este usuario
+  useEffect(() => {
+    if (!currentUser) return;
+    getDocs(query(collection(db, 'reviews'), where('buyerId', '==', currentUser.uid)))
+      .then(snap => setRatedOrderIds(new Set(snap.docs.map(d => d.data().orderId))));
+  }, [currentUser]);
+
+  function handleRateDone() {
+    setRatedOrderIds(prev => new Set([...prev, ratingOrder.id]));
+    setRatingOrder(null);
+  }
+
+  async function handleRepeat(order) {
+    const snap = await getDoc(doc(db, 'vendors', order.vendorId));
+    if (!snap.exists() || !snap.data().isOnline) {
+      toast.warning('Este vendedor no está en línea en este momento');
+      return;
+    }
+    setRepeatModal({ vendor: { id: snap.id, ...snap.data() }, type: order.type, locationId: order.locationId || null });
+  }
+
   const total = orders.reduce((sum, o) => o.status === 'completado' ? sum + calcTotal(o.products) : sum, 0);
 
   if (loading) return <div style={s.loading}>Cargando tus pedidos...</div>;
@@ -146,7 +179,6 @@ export default function MyOrders() {
     <div style={s.page}>
       <div style={s.container}>
 
-        {/* Header */}
         <div style={s.header}>
           <BackButton to="/" label="Volver al mapa" />
           <div style={s.headerInfo}>
@@ -158,7 +190,6 @@ export default function MyOrders() {
           </div>
         </div>
 
-        {/* Contenido */}
         {orders.length === 0 ? (
           <div style={s.empty} className="anim-scale-in">
             <div style={s.emptyIcon}>🛒</div>
@@ -169,12 +200,35 @@ export default function MyOrders() {
         ) : (
           <div style={s.groups}>
             {ORDER_GROUPS.map(group => (
-              <OrderSection key={group.key} group={group} orders={orders} />
+              <OrderSection
+                key={group.key}
+                group={group}
+                orders={orders}
+                ratedOrderIds={ratedOrderIds}
+                onRate={setRatingOrder}
+                onRepeat={handleRepeat}
+              />
             ))}
           </div>
         )}
-
       </div>
+
+      {ratingOrder && (
+        <RatingModal
+          order={ratingOrder}
+          vendor={null}
+          onClose={() => setRatingOrder(null)}
+          onDone={handleRateDone}
+        />
+      )}
+      {repeatModal && (
+        <OrderModal
+          vendor={repeatModal.vendor}
+          type={repeatModal.type}
+          locationId={repeatModal.locationId}
+          onClose={() => setRepeatModal(null)}
+        />
+      )}
     </div>
   );
 }
@@ -188,12 +242,10 @@ const s = {
   headerInfo: {},
   title:      { fontSize:'1.5rem', fontWeight:800, color:'var(--text)', margin:'0.2rem 0 0' },
   subtitle:   { fontSize:'0.88rem', color:'var(--text-2)', margin:0 },
-
   groups:     { display:'flex', flexDirection:'column', gap:'0.7rem' },
 
-  /* Sección colapsable */
   section:    { background:'#fff', borderRadius:'var(--radius-lg)', overflow:'hidden', boxShadow:'var(--shadow-sm)', border:'1px solid var(--border)' },
-  sectionHead:{ width:'100%', display:'flex', justifyContent:'space-between', alignItems:'center', padding:'0.85rem 1rem', background:'var(--bg)', border:'none', cursor:'pointer', fontFamily:'inherit', transition:'background 0.15s' },
+  sectionHead:{ width:'100%', display:'flex', justifyContent:'space-between', alignItems:'center', padding:'0.85rem 1rem', background:'var(--bg)', border:'none', cursor:'pointer', fontFamily:'inherit' },
   sectionHeadLeft:{ display:'flex', alignItems:'center', gap:'0.5rem' },
   dot:        { width:'10px', height:'10px', borderRadius:'50%', flexShrink:0 },
   sectionLabel:{ fontWeight:700, fontSize:'0.92rem', color:'var(--text)' },
@@ -201,7 +253,6 @@ const s = {
   chevron:    { fontSize:'0.7rem', color:'var(--text-3)' },
   cardList:   { padding:'0.6rem', display:'flex', flexDirection:'column', gap:'0.6rem' },
 
-  /* Card de pedido */
   card:       { background:'var(--bg)', borderRadius:'var(--radius)', padding:'0.9rem', border:'1px solid var(--border)', display:'flex', flexDirection:'column', gap:'0.5rem' },
   cardHead:   { display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:'0.35rem' },
   cardHeadLeft:{ display:'flex', alignItems:'center', gap:'0.4rem', flexWrap:'wrap' },
@@ -213,6 +264,7 @@ const s = {
   prodGrid:   { display:'flex', flexDirection:'column', gap:'0.3rem', background:'#fff', borderRadius:'var(--radius-sm)', padding:'0.5rem 0.6rem', border:'1px solid var(--border)' },
   prodItem:   { display:'flex', alignItems:'center', gap:'0.6rem' },
   prodEmoji:  { fontSize:'1.3rem', flexShrink:0 },
+  prodImg:    { width:'36px', height:'36px', borderRadius:'6px', objectFit:'cover', flexShrink:0 },
   prodName:   { fontSize:'0.88rem', fontWeight:500, color:'var(--text)' },
   prodQty:    { color:'var(--text-3)', fontWeight:400 },
   prodPrice:  { fontSize:'0.78rem', color:'var(--green)', fontWeight:700 },
@@ -224,7 +276,10 @@ const s = {
   totalBox:   { fontSize:'0.85rem', color:'var(--text-2)' },
   totalAmt:   { color:'var(--green)', fontSize:'0.95rem' },
 
-  /* Vacío */
+  repeatBtn:  { background:'#eff6ff', color:'#1d4ed8', border:'1px solid #93c5fd', padding:'0.3rem 0.8rem', borderRadius:'20px', fontSize:'0.78rem', fontWeight:700, cursor:'pointer', fontFamily:'inherit' },
+  rateBtn:    { background:'#fef3c7', color:'#92400e', border:'1px solid #fcd34d', padding:'0.3rem 0.8rem', borderRadius:'20px', fontSize:'0.78rem', fontWeight:700, cursor:'pointer', fontFamily:'inherit' },
+  ratedBadge: { background:'#f0fdf4', color:'#166534', border:'1px solid #86efac', padding:'0.3rem 0.8rem', borderRadius:'20px', fontSize:'0.78rem', fontWeight:600 },
+
   empty:      { background:'#fff', borderRadius:'var(--radius-lg)', padding:'3rem 2rem', textAlign:'center', boxShadow:'var(--shadow-sm)', border:'1px solid var(--border)', display:'flex', flexDirection:'column', alignItems:'center', gap:'0.8rem' },
   emptyIcon:  { fontSize:'3.5rem' },
   emptyTitle: { fontSize:'1.2rem', fontWeight:700, color:'var(--text)', margin:0 },

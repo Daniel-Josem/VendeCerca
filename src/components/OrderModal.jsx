@@ -126,7 +126,10 @@ export default function OrderModal({ vendor, type, locationId, onClose }) {
                 return (
                   <div key={p.id} style={{ ...styles.productRow, opacity: hasStock ? 1 : 0.5 }}>
                     <div style={styles.productInfo}>
-                      <span style={styles.productEmoji}>{p.emoji}</span>
+                      {p.imageURL
+                        ? <img src={p.imageURL} alt={p.name} style={styles.productImg} />
+                        : <span style={styles.productEmoji}>{p.emoji}</span>
+                      }
                       <div>
                         <div style={styles.productName}>{p.name}</div>
                         <div style={styles.productPrice}>
@@ -206,7 +209,8 @@ const styles = {
   productList: { display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' },
   productRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem', background: '#f9fafb', borderRadius: '10px', border: '1px solid #e5e7eb' },
   productInfo: { display: 'flex', alignItems: 'center', gap: '0.6rem' },
-  productEmoji: { fontSize: '1.5rem' },
+  productEmoji: { fontSize: '1.5rem', width: '40px', textAlign: 'center' },
+  productImg:   { width: '40px', height: '40px', borderRadius: '8px', objectFit: 'cover', flexShrink: 0 },
   productName: { fontWeight: 500, fontSize: '0.9rem' },
   productPrice: { fontSize: '0.78rem', color: '#555' },
   stockTag: { fontWeight: 600 },

@@ -2,22 +2,23 @@ import { useState } from 'react';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../firebase/config';
 import { useNavigate, Link } from 'react-router-dom';
+import { useToast } from '../context/ToastContext';
 
 export default function Login() {
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError]       = useState('');
   const [loading, setLoading]   = useState(false);
   const navigate = useNavigate();
+  const toast    = useToast();
 
   async function handleSubmit(e) {
     e.preventDefault();
-    setError(''); setLoading(true);
+    setLoading(true);
     try {
       await signInWithEmailAndPassword(auth, email, password);
       navigate('/');
     } catch {
-      setError('Correo o contraseña incorrectos');
+      toast.error('Correo o contraseña incorrectos');
     }
     setLoading(false);
   }
@@ -31,12 +32,6 @@ export default function Login() {
         </div>
         <h2 style={s.title}>Bienvenido de vuelta</h2>
         <p style={s.sub}>Inicia sesión para continuar</p>
-
-        {error && (
-          <div style={s.errorBox} className="anim-fade-in">
-            ⚠️ {error}
-          </div>
-        )}
 
         <form onSubmit={handleSubmit} style={s.form}>
           <div style={s.field}>

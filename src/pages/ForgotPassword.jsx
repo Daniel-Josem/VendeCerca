@@ -2,11 +2,12 @@ import { useState } from 'react';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../firebase/config';
 import { Link } from 'react-router-dom';
+import { useToast } from '../context/ToastContext';
 
 export default function ForgotPassword() {
-  const [email,   setEmail]   = useState('');
-  const [status,  setStatus]  = useState('idle'); // idle | loading | sent | error
-  const [errMsg,  setErrMsg]  = useState('');
+  const [email,  setEmail]  = useState('');
+  const [status, setStatus] = useState('idle');
+  const toast = useToast();
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -15,12 +16,12 @@ export default function ForgotPassword() {
       await sendPasswordResetEmail(auth, email);
       setStatus('sent');
     } catch (err) {
-      setErrMsg(
+      toast.error(
         err.code === 'auth/user-not-found'
           ? 'No encontramos una cuenta con ese correo.'
           : 'Error al enviar. Verifica el correo e intenta de nuevo.'
       );
-      setStatus('error');
+      setStatus('idle');
     }
   }
 
@@ -51,10 +52,6 @@ export default function ForgotPassword() {
             <p style={s.sub}>
               Escribe tu correo y te enviamos un enlace para crear una nueva.
             </p>
-
-            {status === 'error' && (
-              <div style={s.errorBox} className="anim-fade-in">⚠️ {errMsg}</div>
-            )}
 
             <form onSubmit={handleSubmit} style={s.form}>
               <div style={s.field}>
