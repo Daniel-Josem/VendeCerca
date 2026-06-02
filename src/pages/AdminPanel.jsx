@@ -35,7 +35,8 @@ export default function AdminPanel() {
   }, [currentUser, userRole, navigate]);
 
   useEffect(() => {
-    if (!currentUser || userRole !== 'admin') return;
+    if (!currentUser || userRole === null) return; // aún cargando rol
+    if (userRole !== 'admin') { setLoading(false); return; }
     Promise.all([
       getDocs(collection(db, 'vendors')),
       getDocs(collection(db, 'orders')),
