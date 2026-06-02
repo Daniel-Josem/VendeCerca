@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import usePageMeta from '../hooks/usePageMeta';
 import { createUserWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { doc, setDoc, getDoc, collection, addDoc, query, where, getDocs, deleteDoc, serverTimestamp, Timestamp } from 'firebase/firestore';
 import emailjs from '@emailjs/browser';
@@ -17,6 +18,7 @@ function generateCode() {
 }
 
 export default function Register() {
+  usePageMeta({ title: 'Registrarse', description: 'Crea tu cuenta gratis en VendeCerca. Compra productos locales o vende desde tu barrio.' });
   const [form, setForm]     = useState({ name: '', email: '', password: '', role: 'buyer' });
   const [step, setStep]     = useState('form'); // 'form' | 'verify'
   const [code, setCode]     = useState('');

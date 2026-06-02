@@ -1,5 +1,7 @@
 import { Link } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
 import useIsMobile from '../hooks/useIsMobile';
+import usePageMeta from '../hooks/usePageMeta';
 
 const FEATURES = [
   {
@@ -30,11 +32,78 @@ const STEPS = [
   { num: '3', icon: '🛒', title: 'Haz tu pedido',      desc: 'Elige domicilio o retiro. El vendedor recibe tu pedido al instante.' },
 ];
 
+const STATS = [
+  { value: '500+', label: 'Vendedores activos' },
+  { value: '4.8★', label: 'Calificación promedio' },
+  { value: '3',    label: 'Ciudades' },
+  { value: '< 5m', label: 'Tiempo de respuesta' },
+];
+
+const TESTIMONIALS = [
+  {
+    quote: 'Ahora compro mis frutas directamente al vendedor del barrio. Más fresco y más barato que el supermercado.',
+    name: 'Camila R.',
+    role: 'Compradora',
+    city: 'Bogotá',
+    avatar: 'C',
+    color: '#7c3aed',
+  },
+  {
+    quote: 'En una semana ya tenía 15 clientes nuevos. Es muy fácil de usar y los pedidos llegan al instante al celular.',
+    name: 'Don Edilson',
+    role: 'Vendedor de frutas',
+    city: 'Medellín',
+    avatar: 'E',
+    color: '#1a5c1a',
+  },
+  {
+    quote: 'Lo mejor es que veo en el mapa dónde está el vendedor. ¡Nunca más llego a un puesto cerrado!',
+    name: 'Andrés P.',
+    role: 'Comprador',
+    city: 'Cali',
+    avatar: 'A',
+    color: '#0369a1',
+  },
+];
+
+function PinLogo({ color = 'white', accentColor = '#86efac' }) {
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontWeight: 800, fontSize: '1.15rem', letterSpacing: '-0.3px', color }}>
+      <svg width="18" height="22" viewBox="0 0 20 24" fill="none" aria-hidden="true">
+        <path d="M10 0C5.58 0 2 3.58 2 8c0 6.5 8 16 8 16s8-9.5 8-16c0-4.42-3.58-8-8-8z" fill={color}/>
+        <circle cx="10" cy="8" r="3.2" fill={color === 'white' ? '#1a5c1a' : 'white'}/>
+      </svg>
+      Vende<span style={{ color: accentColor }}>Cerca</span>
+    </span>
+  );
+}
+
+function useInView(options = {}) {
+  const ref = useRef(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) { setVisible(true); obs.disconnect(); }
+    }, { threshold: 0.2, ...options });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+  return [ref, visible];
+}
+
 export default function Landing() {
+  usePageMeta({
+    title: 'Compra a vendedores de tu barrio',
+    description: 'Encuentra frutas, verduras y productos frescos cerca de ti. Apoya a los vendedores locales con domicilio o retiro. ¡Gratis y sin intermediarios!',
+  });
   const isMobile = useIsMobile();
+  const [statsRef, statsVisible] = useInView();
+  const [testimonialsRef, testimonialsVisible] = useInView();
 
   return (
-    <div style={s.page}>
+    <div style={s.page} className="page-enter">
 
       {/* ── HERO ── */}
       <section style={s.hero}>
@@ -54,7 +123,7 @@ export default function Landing() {
           </div>
         </div>
 
-        {/* Ilustración / decoración */}
+        {/* Tarjeta decorativa */}
         <div style={s.heroDecor}>
           <div style={s.heroCard}>
             <div style={s.heroCardRow}>
@@ -74,11 +143,28 @@ export default function Landing() {
               <div style={s.heroCardBtnA}>🛵 Domicilio</div>
               <div style={s.heroCardBtnB}>🛒 Ir a comprar</div>
             </div>
+            {/* Rating row */}
+            <div style={s.heroCardRating}>
+              <span style={s.heroStars}>★★★★★</span>
+              <span style={s.heroRatingText}>4.9 · 48 reseñas</span>
+            </div>
           </div>
           <div style={s.heroMap}>
-            <span style={{ fontSize: '3rem' }}>🗺️</span>
-            <span style={{ fontSize: '0.8rem', color: '#6b7280', marginTop: '0.3rem' }}>Mapa en tiempo real</span>
+            <span style={{ fontSize: '2.5rem' }}>🗺️</span>
+            <span style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: '0.3rem' }}>Mapa en tiempo real</span>
           </div>
+        </div>
+      </section>
+
+      {/* ── STATS ── */}
+      <section ref={statsRef} style={s.statsSection}>
+        <div style={s.statsInner}>
+          {STATS.map((st, i) => (
+            <div key={i} style={s.statItem} className={statsVisible ? 'stat-visible' : ''} style2={{ animationDelay: `${i * 0.1}s` }}>
+              <div style={s.statValue}>{st.value}</div>
+              <div style={s.statLabel}>{st.label}</div>
+            </div>
+          ))}
         </div>
       </section>
 
@@ -89,7 +175,7 @@ export default function Landing() {
           <h2 style={s.sectionTitle}>Todo lo que necesitas para comprar local</h2>
           <div style={{ ...s.featGrid, gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4,1fr)' }}>
             {FEATURES.map((f, i) => (
-              <div key={i} style={s.featCard} className="anim-fade-up" style2={{ animationDelay: `${i * 0.08}s` }}>
+              <div key={i} style={s.featCard} className="feat-card-hover anim-fade-up">
                 <div style={s.featIcon}>{f.icon}</div>
                 <h3 style={s.featTitle}>{f.title}</h3>
                 <p style={s.featDesc}>{f.desc}</p>
@@ -112,6 +198,29 @@ export default function Landing() {
                 <h3 style={s.stepTitle}>{step.title}</h3>
                 <p style={s.stepDesc}>{step.desc}</p>
                 {i < STEPS.length - 1 && !isMobile && <div style={s.stepArrow}>→</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── TESTIMONIOS ── */}
+      <section ref={testimonialsRef} style={s.section}>
+        <div style={s.sectionInner}>
+          <p style={s.sectionLabel}>Lo que dicen nuestros usuarios</p>
+          <h2 style={s.sectionTitle}>Reales. Locales. Satisfechos.</h2>
+          <div style={{ ...s.testimonialGrid, gridTemplateColumns: isMobile ? '1fr' : 'repeat(3,1fr)' }}>
+            {TESTIMONIALS.map((t, i) => (
+              <div key={i} style={s.testimonialCard} className={`testimonial-card${testimonialsVisible ? ' anim-fade-up' : ''}`}>
+                <div style={s.quoteIcon}>"</div>
+                <p style={s.quoteText}>{t.quote}</p>
+                <div style={s.testimonialAuthor}>
+                  <div style={{ ...s.testimonialAvatar, background: t.color }}>{t.avatar}</div>
+                  <div>
+                    <div style={s.testimonialName}>{t.name}</div>
+                    <div style={s.testimonialRole}>{t.role} · {t.city}</div>
+                  </div>
+                </div>
               </div>
             ))}
           </div>
@@ -144,13 +253,15 @@ export default function Landing() {
       <footer style={s.footer}>
         <div style={s.footerInner}>
           <div style={s.footerLogo}>
-            <span>📍</span> VendeCerca
+            <PinLogo color="white" accentColor="#86efac" />
           </div>
           <p style={s.footerSub}>Conectando compradores con vendedores locales</p>
           <div style={s.footerLinks}>
             <Link to="/login"    style={s.footerLink}>Iniciar sesión</Link>
             <Link to="/register" style={s.footerLink}>Registrarse</Link>
+            <Link to="/mapa"     style={s.footerLink}>Ver mapa</Link>
           </div>
+          <p style={s.footerCopy}>© {new Date().getFullYear()} VendeCerca · Hecho con ❤️ para el comercio local</p>
         </div>
       </footer>
 
@@ -185,8 +296,7 @@ const s = {
     WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
   },
   heroSub: {
-    color: 'rgba(255,255,255,0.75)', lineHeight: 1.7,
-    marginBottom: '2rem',
+    color: 'rgba(255,255,255,0.75)', lineHeight: 1.7, marginBottom: '2rem',
   },
   heroCtas: { display: 'flex', gap: '0.8rem', flexWrap: 'wrap' },
   ctaPrimary: {
@@ -220,15 +330,14 @@ const s = {
   heroCardDist: { fontSize: '0.72rem', color: '#6b7280', marginTop: '0.1rem' },
   heroCardBadge: {
     marginLeft: 'auto', background: '#dcfce7', color: '#166534',
-    fontSize: '0.68rem', fontWeight: 700, padding: '0.15rem 0.5rem',
-    borderRadius: '20px',
+    fontSize: '0.68rem', fontWeight: 700, padding: '0.15rem 0.5rem', borderRadius: '20px',
   },
   heroCardProds: { display: 'flex', gap: '0.3rem', flexWrap: 'wrap', marginBottom: '0.7rem' },
   heroCardTag: {
     background: '#f3f7f3', color: '#374151', fontSize: '0.72rem',
     padding: '0.18rem 0.5rem', borderRadius: '20px', border: '1px solid #e5e7eb',
   },
-  heroCardBtns: { display: 'flex', gap: '0.4rem' },
+  heroCardBtns: { display: 'flex', gap: '0.4rem', marginBottom: '0.6rem' },
   heroCardBtnA: {
     flex: 1, background: 'linear-gradient(135deg, #f59e0b, #f97316)',
     color: '#fff', textAlign: 'center', padding: '0.45rem 0',
@@ -239,12 +348,32 @@ const s = {
     color: '#fff', textAlign: 'center', padding: '0.45rem 0',
     borderRadius: '8px', fontSize: '0.75rem', fontWeight: 700,
   },
+  heroCardRating: { display: 'flex', alignItems: 'center', gap: '0.4rem', borderTop: '1px solid #f3f4f6', paddingTop: '0.5rem' },
+  heroStars:      { color: '#f59e0b', fontSize: '0.75rem', letterSpacing: '-1px' },
+  heroRatingText: { fontSize: '0.72rem', color: '#6b7280' },
   heroMap: {
     background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)',
     borderRadius: '12px', padding: '1rem 1.5rem',
     display: 'flex', flexDirection: 'column', alignItems: 'center',
     color: '#fff', fontSize: '0.8rem',
   },
+
+  /* Stats */
+  statsSection: {
+    background: 'linear-gradient(90deg, #0d3b0d, #1a5c1a)',
+    padding: '2.5rem 1.5rem',
+  },
+  statsInner: {
+    maxWidth: '900px', margin: '0 auto',
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+    gap: '1rem',
+  },
+  statItem: {
+    textAlign: 'center', padding: '0.5rem',
+    borderRight: '1px solid rgba(255,255,255,0.1)',
+  },
+  statValue: { fontSize: '2rem', fontWeight: 800, color: '#86efac', lineHeight: 1 },
+  statLabel: { fontSize: '0.82rem', color: 'rgba(255,255,255,0.65)', marginTop: '0.3rem', fontWeight: 500 },
 
   /* Sections */
   section:    { padding: '4rem 1.5rem', background: '#fff' },
@@ -257,7 +386,7 @@ const s = {
   featGrid: { display: 'grid', gap: '1.2rem' },
   featCard: {
     background: '#fff', border: '1.5px solid #e5e7eb', borderRadius: '16px',
-    padding: '1.5rem 1.2rem', transition: 'box-shadow 0.2s, transform 0.2s',
+    padding: '1.5rem 1.2rem',
     boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
   },
   featIcon:  { fontSize: '2rem', marginBottom: '0.8rem' },
@@ -286,6 +415,25 @@ const s = {
     transform: 'translateY(-50%)', fontSize: '1.3rem', color: '#d1d5db', zIndex: 1,
   },
 
+  /* Testimonials */
+  testimonialGrid: { display: 'grid', gap: '1.2rem' },
+  testimonialCard: {
+    background: '#fff', border: '1.5px solid #e5e7eb', borderRadius: '18px',
+    padding: '1.6rem 1.4rem',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+    display: 'flex', flexDirection: 'column', gap: '1rem',
+  },
+  quoteIcon: { fontSize: '2.5rem', lineHeight: 1, color: '#e5e7eb', fontFamily: 'Georgia,serif', marginBottom: '-0.5rem' },
+  quoteText: { fontSize: '0.9rem', color: '#374151', lineHeight: 1.7, fontStyle: 'italic', flex: 1 },
+  testimonialAuthor: { display: 'flex', alignItems: 'center', gap: '0.7rem' },
+  testimonialAvatar: {
+    width: '40px', height: '40px', borderRadius: '50%', flexShrink: 0,
+    color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontWeight: 700, fontSize: '1rem',
+  },
+  testimonialName: { fontWeight: 700, fontSize: '0.88rem', color: '#111827' },
+  testimonialRole: { fontSize: '0.75rem', color: '#9ca3af' },
+
   /* Vendor CTA */
   vendorSection: {
     background: 'linear-gradient(135deg, #0d3b0d 0%, #1a5c1a 50%, #2d7a2d 100%)',
@@ -311,10 +459,11 @@ const s = {
   vendorNote: { color: 'rgba(255,255,255,0.55)', fontSize: '0.78rem' },
 
   /* Footer */
-  footer: { background: '#0d3b0d', padding: '2rem 1.5rem' },
-  footerInner: { maxWidth: '1100px', margin: '0 auto', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'center' },
-  footerLogo: { color: '#fff', fontWeight: 800, fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '0.4rem' },
+  footer: { background: '#0d3b0d', padding: '2.5rem 1.5rem' },
+  footerInner: { maxWidth: '1100px', margin: '0 auto', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '0.6rem', alignItems: 'center' },
+  footerLogo: { marginBottom: '0.3rem' },
   footerSub:   { color: 'rgba(255,255,255,0.45)', fontSize: '0.82rem' },
-  footerLinks: { display: 'flex', gap: '1.5rem', marginTop: '0.3rem' },
-  footerLink:  { color: 'rgba(255,255,255,0.55)', textDecoration: 'none', fontSize: '0.82rem' },
+  footerLinks: { display: 'flex', gap: '1.5rem', marginTop: '0.4rem', flexWrap: 'wrap', justifyContent: 'center' },
+  footerLink:  { color: 'rgba(255,255,255,0.55)', textDecoration: 'none', fontSize: '0.82rem', transition: 'color 0.15s' },
+  footerCopy:  { color: 'rgba(255,255,255,0.25)', fontSize: '0.72rem', marginTop: '0.6rem' },
 };

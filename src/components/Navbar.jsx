@@ -88,8 +88,11 @@ export default function Navbar() {
       <nav style={{ ...styles.nav, boxShadow: scrolled ? '0 2px 20px rgba(0,0,0,0.18)' : '0 1px 0 rgba(255,255,255,0.08)' }}>
         <div style={styles.inner}>
           <Link to="/" style={styles.logo}>
-            <span style={styles.logoIcon}>📍</span>
-            VendeCerca
+            <svg width="20" height="24" viewBox="0 0 20 24" fill="none" aria-hidden="true">
+              <path d="M10 0C5.58 0 2 3.58 2 8c0 6.5 8 16 8 16s8-9.5 8-16c0-4.42-3.58-8-8-8z" fill="white"/>
+              <circle cx="10" cy="8" r="3.2" fill="#1a5c1a"/>
+            </svg>
+            <span>Vende<span style={styles.logoAccent}>Cerca</span></span>
           </Link>
 
           {isMobile ? (
@@ -193,9 +196,9 @@ const styles = {
   logo: {
     color: '#fff', textDecoration: 'none', fontWeight: 800,
     fontSize: '1.25rem', letterSpacing: '-0.3px',
-    display: 'flex', alignItems: 'center', gap: '0.4rem',
+    display: 'flex', alignItems: 'center', gap: '0.5rem',
   },
-  logoIcon: { fontSize: '1.1rem' },
+  logoAccent: { color: '#86efac' },
   right: { display: 'flex', alignItems: 'center', gap: '0.6rem' },
   greeting: { color: 'rgba(255,255,255,0.7)', fontSize: '0.85rem', marginRight: '0.4rem' },
   navLink: {

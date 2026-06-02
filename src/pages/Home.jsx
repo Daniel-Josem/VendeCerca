@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { MapContainer, TileLayer, Marker, Popup, useMap, Circle } from 'react-leaflet';
@@ -10,15 +10,19 @@ import { useAuth } from '../context/AuthContext';
 import useIsMobile from '../hooks/useIsMobile';
 import useFavorites from '../hooks/useFavorites';
 
-// Ícono personalizado verde
+// Ícono personalizado verde — cacheado para no recrear en cada render
+const _iconCache = {};
 function makeVendorIcon(emoji = '🏪') {
-  return L.divIcon({
-    className: '',
-    html: `<div class="vendor-marker"><span class="vendor-marker-icon">${emoji}</span></div>`,
-    iconSize: [42, 42],
-    iconAnchor: [21, 42],
-    popupAnchor: [0, -46],
-  });
+  if (!_iconCache[emoji]) {
+    _iconCache[emoji] = L.divIcon({
+      className: '',
+      html: `<div class="vendor-marker"><span class="vendor-marker-icon">${emoji}</span></div>`,
+      iconSize: [42, 42],
+      iconAnchor: [21, 42],
+      popupAnchor: [0, -46],
+    });
+  }
+  return _iconCache[emoji];
 }
 
 function haversineDistance(lat1, lng1, lat2, lng2) {
@@ -102,12 +106,19 @@ export default function Home() {
   const [filterRating, setFilterRating] = useState(0);
   const [filterDist,   setFilterDist]   = useState(0);
   const [sortBy,       setSortBy]       = useState('dist');
+  // En móvil el mapa no se monta hasta que el usuario lo pida por primera vez
+  const [mapMounted,   setMapMounted]   = useState(!isMobile);
 
   function flyToSede(v, loc) {
     if (!mapRef.current || !loc.lat) return;
     mapRef.current.flyTo([loc.lat, loc.lng], 17, { duration: 1.2 });
     setTimeout(() => markerRefs.current[`${v.id}-${loc.id}`]?.openPopup(), 1300);
   }
+
+  // Monta el mapa la primera vez que el usuario cambia a la vista mapa
+  useEffect(() => {
+    if (activeView === 'map') setMapMounted(true);
+  }, [activeView]);
 
   // Ejecuta el fly pendiente cuando el mapa se vuelve visible
   useEffect(() => {
@@ -142,7 +153,7 @@ export default function Home() {
     return onSnapshot(q, snap => setVendors(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
   }, []);
 
-  const filtered = vendors
+  const filtered = useMemo(() => vendors
     .filter(v => {
       const hasOnline = v.locations?.some(l => l.isOnline) || v.isOnline;
       if (!hasOnline) return false;
@@ -171,7 +182,7 @@ export default function Home() {
       if (sortBy === 'rating') return (b.rating || 0) - (a.rating || 0);
       if (sortBy === 'name')   return (a.name || '').localeCompare(b.name || '');
       return (a.distance ?? Infinity) - (b.distance ?? Infinity);
-    });
+    }), [vendors, userPos, search, filterRating, filterDist, sortBy]);
 
   function selectVendor(v) {
     if (selectedVendor?.id === v.id) { setSelected(null); return; }
@@ -492,7 +503,17 @@ export default function Home() {
           </button>
         )}
 
-        <MapContainer
+        {!mapMounted && (
+          <div style={s.mapSkeleton}>
+            <svg width="48" height="58" viewBox="0 0 20 24" fill="none" style={{ animation:'pinPulse 1.4s ease-in-out infinite' }}>
+              <path d="M10 0C5.58 0 2 3.58 2 8c0 6.5 8 16 8 16s8-9.5 8-16c0-4.42-3.58-8-8-8z" fill="#1a5c1a"/>
+              <circle cx="10" cy="8" r="3.2" fill="white"/>
+            </svg>
+            <span style={{ color:'#1a5c1a', fontWeight:700, fontSize:'0.9rem' }}>Cargando mapa...</span>
+            <style>{`@keyframes pinPulse{0%,100%{transform:translateY(0) scale(1)}50%{transform:translateY(-6px) scale(1.08)}}`}</style>
+          </div>
+        )}
+        {mapMounted && <MapContainer
           center={mapCenter} zoom={14}
           style={{ height: '100%', width: '100%' }}
           whenReady={() => setMapReady(true)}
@@ -554,7 +575,7 @@ export default function Home() {
               </Marker>
             ));
           })}
-        </MapContainer>
+        </MapContainer>}
 
         {/* Badge flotante sobre el mapa */}
         {!mapReady && (
@@ -723,6 +744,7 @@ const s = {
     transition: 'all 0.2s ease',
   },
   mapLoading: { position: 'absolute', top: '1rem', left: '50%', transform: 'translateX(-50%)', background: '#fff', padding: '0.5rem 1rem', borderRadius: '20px', fontSize: '0.85rem', color: 'var(--text-2)', boxShadow: 'var(--shadow)', display: 'flex', alignItems: 'center', gap: '0.5rem', zIndex: 999 },
+  mapSkeleton: { position: 'absolute', inset: 0, background: '#f0f7f0', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '1rem', zIndex: 10 },
   mapLoadingDot: { width: '8px', height: '8px', borderRadius: '50%', background: 'var(--green)', animation: 'ping 1s ease-in-out infinite' },
 
   /* Popup */

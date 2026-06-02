@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase/config';
+import usePageMeta from '../hooks/usePageMeta';
 
 function formatDate(ts) {
   if (!ts) return '';
@@ -24,6 +25,14 @@ export default function VendorProfile() {
       setReviews(list);
     });
   }, [id]);
+
+  usePageMeta(vendor ? {
+    title: vendor.name,
+    description: vendor.description
+      ? `${vendor.name} — ${vendor.description}. Pide a domicilio o retira en el local.`
+      : `${vendor.name} — Vendedor local en VendeCerca. Frutas, verduras y más.`,
+    image: vendor.photoURL || undefined,
+  } : {});
 
   if (!vendor) return <div style={s.loading}>Cargando...</div>;
 

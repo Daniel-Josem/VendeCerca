@@ -64,7 +64,7 @@ function OrderSection({ group, orders, onUpdateStatus }) {
 
   return (
     <div style={s.orderSection}>
-      <button style={{ ...s.orderSectionHead, borderLeft: `4px solid ${group.color}` }} onClick={() => setOpen(o => !o)}>
+      <button type="button" style={{ ...s.orderSectionHead, borderLeft: `4px solid ${group.color}`, borderRadius: open ? 'var(--radius) var(--radius) 0 0' : 'var(--radius)' }} onClick={() => setOpen(o => !o)}>
         <div style={{ display:'flex', alignItems:'center', gap:'0.5rem' }}>
           <span style={{ ...s.groupDot, background: group.color }} />
           <span style={s.groupLabel}>{group.label}</span>
@@ -400,7 +400,22 @@ export default function VendorDashboard() {
     toast.success('Perfil guardado correctamente');
   }
 
-  if (!vendor) return <div style={s.loading}>Cargando...</div>;
+  if (!vendor) return (
+    <div style={s.page}>
+      <div style={s.container}>
+        <div style={{ display:'flex', alignItems:'center', gap:'1rem', padding:'0.5rem 0' }}>
+          <div className="skeleton" style={{ width:64, height:64, borderRadius:'50%', flexShrink:0 }} />
+          <div style={{ flex:1, display:'flex', flexDirection:'column', gap:'0.5rem' }}>
+            <div className="skeleton" style={{ height:20, width:'50%', borderRadius:8 }} />
+            <div className="skeleton" style={{ height:14, width:'35%', borderRadius:8 }} />
+          </div>
+        </div>
+        {[1,2,3].map(i => (
+          <div key={i} className="skeleton" style={{ height:90, borderRadius:'var(--radius-lg)' }} />
+        ))}
+      </div>
+    </div>
+  );
 
   const activeLoc   = locations.find(l => l.id===activeLocId);
   const mapCenter   = activeLoc?.lat ? [activeLoc.lat, activeLoc.lng] : [4.7109, -74.0721];
@@ -726,13 +741,13 @@ const s = {
   empty:      { color:'var(--text-3)', fontSize:'0.85rem', textAlign:'center', padding:'0.6rem 0' },
 
   /* Pedidos colapsables */
-  orderSection:     { border:'1px solid var(--border)', borderRadius:'var(--radius)', overflow:'hidden' },
-  orderSectionHead: { width:'100%', display:'flex', justifyContent:'space-between', alignItems:'center', padding:'0.75rem 1rem', background:'var(--bg)', border:'none', cursor:'pointer', fontFamily:'inherit', borderLeft:'4px solid #ccc' },
+  orderSection:     { border:'1px solid var(--border)', borderRadius:'var(--radius)' },
+  orderSectionHead: { width:'100%', display:'flex', justifyContent:'space-between', alignItems:'center', padding:'0.75rem 1rem', background:'var(--bg)', border:'none', cursor:'pointer', fontFamily:'inherit', borderLeft:'4px solid #ccc', touchAction:'manipulation', WebkitTapHighlightColor:'transparent' },
   groupDot:    { width:'10px', height:'10px', borderRadius:'50%', flexShrink:0 },
   groupLabel:  { fontWeight:600, fontSize:'0.9rem', color:'var(--text)' },
   groupCount:  { color:'#fff', fontSize:'0.72rem', fontWeight:700, padding:'0.1rem 0.45rem', borderRadius:'20px' },
   chevron:     { fontSize:'0.7rem', color:'var(--text-3)' },
-  orderList:   { padding:'0.7rem', display:'flex', flexDirection:'column', gap:'0.6rem', background:'#fff' },
+  orderList:   { padding:'0.7rem', display:'flex', flexDirection:'column', gap:'0.6rem', background:'#fff', borderRadius:'0 0 var(--radius) var(--radius)' },
   orderCard:   { background:'var(--bg)', borderRadius:'var(--radius-sm)', padding:'0.8rem', border:'1px solid var(--border)' },
   orderHead:   { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'0.4rem', flexWrap:'wrap', gap:'0.3rem' },
   typePill:    { fontSize:'0.78rem', fontWeight:600, padding:'0.18rem 0.55rem', borderRadius:'20px' },

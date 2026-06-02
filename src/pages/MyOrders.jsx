@@ -7,6 +7,7 @@ import BackButton from '../components/BackButton';
 import RatingModal from '../components/RatingModal';
 import OrderModal from '../components/OrderModal';
 import { useToast } from '../context/ToastContext';
+import usePageMeta from '../hooks/usePageMeta';
 
 const STATUS_COLOR = {
   pendiente:  '#f59e0b',
@@ -130,6 +131,7 @@ function OrderSection({ group, orders, ratedOrderIds, onRate, onRepeat }) {
 }
 
 export default function MyOrders() {
+  usePageMeta({ title: 'Mis Pedidos', description: 'Revisa el estado de tus pedidos en VendeCerca.' });
   const { currentUser }   = useAuth();
   const navigate          = useNavigate();
   const toast             = useToast();

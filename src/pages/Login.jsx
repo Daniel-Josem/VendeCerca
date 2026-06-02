@@ -4,10 +4,12 @@ import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
 import { useNavigate, Link } from 'react-router-dom';
 import { useToast } from '../context/ToastContext';
+import usePageMeta from '../hooks/usePageMeta';
 
 const googleProvider = new GoogleAuthProvider();
 
 export default function Login() {
+  usePageMeta({ title: 'Iniciar sesión', description: 'Accede a tu cuenta de VendeCerca.' });
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading]   = useState(false);

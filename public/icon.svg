@@ -1,14 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#1a5c1a"/>
-  <rect width="512" height="512" rx="112" fill="url(#g)"/>
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#1a5c1a"/>
-      <stop offset="100%" stop-color="#3d9e3d"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#2d7a2d"/>
+      <stop offset="100%" stop-color="#0d3b0d"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="white" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0"/>
     </linearGradient>
   </defs>
-  <!-- Pin shape -->
-  <ellipse cx="256" cy="340" rx="40" ry="14" fill="rgba(0,0,0,0.2)"/>
-  <path d="M256 120 C214 120 180 154 180 196 C180 244 256 340 256 340 C256 340 332 244 332 196 C332 154 298 120 256 120Z" fill="white"/>
-  <circle cx="256" cy="196" r="34" fill="#1a5c1a"/>
+  <rect width="512" height="512" rx="110" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="110" fill="url(#shine)"/>
+  <!-- Pin shadow -->
+  <ellipse cx="256" cy="360" rx="52" ry="16" fill="black" opacity="0.18"/>
+  <!-- Pin body -->
+  <path d="M256 96C200 96 155 141 155 197c0 78 101 207 101 207s101-129 101-207c0-56-45-101-101-101z" fill="white"/>
+  <!-- Inner circle -->
+  <circle cx="256" cy="193" r="42" fill="#1a5c1a"/>
+  <!-- Leaf highlight inside circle -->
+  <circle cx="256" cy="193" r="28" fill="white" opacity="0.25"/>
+  <circle cx="244" cy="181" r="10" fill="white" opacity="0.35"/>
 </svg>

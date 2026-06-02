@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0d3b0d"/>
+      <stop offset="60%" stop-color="#1a5c1a"/>
+      <stop offset="100%" stop-color="#2d7a2d"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#86efac"/>
+      <stop offset="100%" stop-color="#4ade80"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <!-- Decorative blobs -->
+  <circle cx="60"   cy="60"  r="220" fill="rgba(255,255,255,0.03)"/>
+  <circle cx="1160" cy="570" r="280" fill="rgba(255,255,255,0.04)"/>
+  <circle cx="1100" cy="80"  r="140" fill="rgba(134,239,172,0.06)"/>
+
+  <!-- Pin icon centered above text -->
+  <path d="M600 130 C562 130 532 160 532 198 C532 252 600 330 600 330 C600 330 668 252 668 198 C668 160 638 130 600 130Z" fill="white" opacity="0.95"/>
+  <circle cx="600" cy="196" r="26" fill="#1a5c1a"/>
+  <circle cx="600" cy="196" r="14" fill="white" opacity="0.3"/>
+
+  <!-- Main text: Vende -->
+  <text x="484" y="430" font-family="Inter,system-ui,-apple-system,sans-serif" font-weight="800" font-size="96" fill="white" letter-spacing="-4">Vende</text>
+  <!-- Main text: Cerca (gradient green) -->
+  <text x="717" y="430" font-family="Inter,system-ui,-apple-system,sans-serif" font-weight="800" font-size="96" fill="url(#accent)" letter-spacing="-4">Cerca</text>
+
+  <!-- Tagline -->
+  <text x="600" y="490" text-anchor="middle" font-family="Inter,system-ui,-apple-system,sans-serif" font-weight="400" font-size="28" fill="rgba(255,255,255,0.65)" letter-spacing="0.3">Compra a vendedores de tu barrio · Productos frescos y locales</text>
+
+  <!-- Pills row -->
+  <rect x="294" y="535" width="138" height="46" rx="23" fill="rgba(255,255,255,0.1)" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>
+  <text x="363" y="564" text-anchor="middle" font-family="system-ui,sans-serif" font-size="24" fill="white">🥑 Frutas</text>
+
+  <rect x="448" y="535" width="156" height="46" rx="23" fill="rgba(255,255,255,0.1)" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>
+  <text x="526" y="564" text-anchor="middle" font-family="system-ui,sans-serif" font-size="24" fill="white">🌽 Verduras</text>
+
+  <rect x="620" y="535" width="160" height="46" rx="23" fill="rgba(255,255,255,0.1)" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>
+  <text x="700" y="564" text-anchor="middle" font-family="system-ui,sans-serif" font-size="24" fill="white">🛵 Domicilio</text>
+
+  <rect x="796" y="535" width="162" height="46" rx="23" fill="rgba(255,255,255,0.1)" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>
+  <text x="877" y="564" text-anchor="middle" font-family="system-ui,sans-serif" font-size="24" fill="white">📍 Tu barrio</text>
+</svg>
