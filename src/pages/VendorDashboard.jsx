@@ -1,9 +1,10 @@
 import { useEffect, useState, useRef } from 'react';
-import { doc, getDoc, updateDoc, collection, query, where, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, query, where, onSnapshot, serverTimestamp, deleteField } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import BackButton from '../components/BackButton';
+import ChatDrawer from '../components/ChatDrawer';
 import { v4 as uuidv4 } from 'uuid';
 import { useToast } from '../context/ToastContext';
 import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from 'react-leaflet';
@@ -57,7 +58,7 @@ function RecenterMap({ lat, lng }) {
 }
 
 // ── Sección colapsable ──────────────────────────────
-function OrderSection({ group, orders, onUpdateStatus }) {
+function OrderSection({ group, orders, onUpdateStatus, onChat }) {
   const [open, setOpen] = useState(group.defaultOpen);
   const filtered = orders.filter(o => group.statuses.includes(o.status));
   if (filtered.length === 0) return null;
@@ -105,6 +106,11 @@ function OrderSection({ group, orders, onUpdateStatus }) {
                   {order.status==='en_camino' ? '✅ Marcar como entregado' : '✅ Confirmar recogida'}
                 </button>
               )}
+              {order.status !== 'cancelado' && (
+                <button style={s.btnChat} onClick={() => onChat(order)}>
+                  💬 Chatear con {order.buyerName?.split(' ')[0] || 'cliente'}
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -141,6 +147,11 @@ export default function VendorDashboard() {
   const prodImgRef = useRef(null);
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileSaved,  setProfileSaved]  = useState(false);
+  const [chatOrder,     setChatOrder]     = useState(null);
+  const [liveTracking,  setLiveTracking]  = useState(false);
+  const [livePos,       setLivePos]       = useState(null);
+  const watchIdRef    = useRef(null);
+  const lastLiveWrite = useRef(0);
   const [gpsMsg,        setGpsMsg]        = useState('');
 
   useEffect(() => {
@@ -241,6 +252,16 @@ export default function VendorDashboard() {
     }, err => console.error(err));
   }, [currentUser]);
 
+  // Limpiar watchPosition al desmontar (el liveLocation expira en el lado comprador)
+  useEffect(() => {
+    return () => {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+    };
+  }, []);
+
   // ── Guardar locations ────────────────────────────
   async function saveLocs(updated) {
     setLocations(updated);
@@ -288,6 +309,38 @@ export default function VendorDashboard() {
     if (activeLocId===locId) setActiveLocId(updated[0]?.id||null);
     if (prodLocId===locId)   setProdLocId(updated[0]?.id||null);
     await saveLocs(updated);
+  }
+
+  // ── Rastreo GPS en tiempo real ──────────────────
+  function startLiveTracking() {
+    if (!navigator.geolocation) { toast.error('Tu dispositivo no soporta GPS'); return; }
+    const id = navigator.geolocation.watchPosition(
+      ({ coords }) => {
+        const { latitude: lat, longitude: lng, accuracy, heading, speed } = coords;
+        setLivePos({ lat, lng, accuracy });
+        const now = Date.now();
+        if (now - lastLiveWrite.current < 10_000) return;
+        lastLiveWrite.current = now;
+        updateDoc(doc(db, 'vendors', currentUser.uid), {
+          liveLocation: { lat, lng, accuracy, heading: heading ?? null, speed: speed ?? null, updatedAt: now }
+        });
+      },
+      () => { toast.error('No se pudo obtener ubicación GPS'); stopLiveTracking(); },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+    );
+    watchIdRef.current = id;
+    setLiveTracking(true);
+    toast.success('📡 Compartiendo ubicación en vivo');
+  }
+
+  async function stopLiveTracking() {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    setLiveTracking(false);
+    setLivePos(null);
+    await updateDoc(doc(db, 'vendors', currentUser.uid), { liveLocation: deleteField() });
   }
 
   // ── Productos por sede ───────────────────────────
@@ -442,6 +495,7 @@ export default function VendorDashboard() {
   const topProd = Object.values(prodMap).sort((a,b) => b.count - a.count)[0];
 
   return (
+    <>
     <div style={s.page}>
       <div style={s.container}>
 
@@ -545,7 +599,7 @@ export default function VendorDashboard() {
           ) : (
             <div style={{ display:'flex', flexDirection:'column', gap:'0.5rem' }}>
               {ORDER_GROUPS.map(group => (
-                <OrderSection key={group.key} group={group} orders={orders} onUpdateStatus={updateOrderStatus} />
+                <OrderSection key={group.key} group={group} orders={orders} onUpdateStatus={updateOrderStatus} onChat={setChatOrder} />
               ))}
             </div>
           )}
@@ -584,6 +638,35 @@ export default function VendorDashboard() {
               </div>
             ))}
           </div>
+          {/* RASTREO EN TIEMPO REAL */}
+          <div style={s.liveBox}>
+            <div style={s.liveBoxRow}>
+              <div>
+                <span style={s.liveTitleTxt}>📡 Ubicación en tiempo real</span>
+                {liveTracking && livePos && (
+                  <span style={s.liveCoords}>
+                    {livePos.lat.toFixed(5)}, {livePos.lng.toFixed(5)} · ±{Math.round(livePos.accuracy)}m
+                  </span>
+                )}
+                {!liveTracking && (
+                  <span style={s.liveHint}>Actívalo para que los compradores vean dónde estás en este momento</span>
+                )}
+              </div>
+              <button
+                style={liveTracking ? s.liveStopBtn : s.liveStartBtn}
+                onClick={liveTracking ? stopLiveTracking : startLiveTracking}
+              >
+                {liveTracking ? '⏹ Detener' : '▶ Activar'}
+              </button>
+            </div>
+            {liveTracking && (
+              <div style={s.liveBanner}>
+                <span style={s.livePulse} />
+                Compartiendo tu posición en vivo con compradores cercanos
+              </div>
+            )}
+          </div>
+
           {gpsMsg && <p style={{ fontSize:'0.82rem', color:gpsMsg.startsWith('✅')?'#2d7a2d':'#dc2626', margin:'0.3rem 0' }}>{gpsMsg}</p>}
           <p style={s.mapHint}>
             {activeLocId
@@ -596,6 +679,17 @@ export default function VendorDashboard() {
               <MapClickHandler activeLocId={activeLocId} onSet={setLocationPos} />
               {activeLoc?.lat && <RecenterMap lat={activeLoc.lat} lng={activeLoc.lng} />}
               {locations.filter(l=>l.lat).map(l => <Marker key={l.id} position={[l.lat,l.lng]} />)}
+              {livePos && (
+                <Marker
+                  key="live-dash"
+                  position={[livePos.lat, livePos.lng]}
+                  icon={L.divIcon({
+                    className: '',
+                    html: '<div style="width:16px;height:16px;background:#ef4444;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(239,68,68,0.6)"></div>',
+                    iconSize: [16,16], iconAnchor: [8,8],
+                  })}
+                />
+              )}
             </MapContainer>
           </div>
         </div>
@@ -712,6 +806,11 @@ export default function VendorDashboard() {
 
       </div>
     </div>
+
+    {chatOrder && (
+      <ChatDrawer order={chatOrder} onClose={() => setChatOrder(null)} />
+    )}
+    </>
   );
 }
 
@@ -760,6 +859,7 @@ const s = {
   btnAccept:   { flex:1, background:'var(--green)', color:'#fff', border:'none', padding:'0.5rem 0.7rem', borderRadius:'var(--radius-sm)', cursor:'pointer', fontWeight:600, fontSize:'0.83rem', fontFamily:'inherit' },
   btnReject:   { background:'#fee2e2', color:'var(--red)', border:'none', padding:'0.5rem 0.7rem', borderRadius:'var(--radius-sm)', cursor:'pointer', fontWeight:700, fontFamily:'inherit' },
   btnComplete: { marginTop:'0.4rem', width:'100%', background:'var(--green)', color:'#fff', border:'none', padding:'0.45rem', borderRadius:'var(--radius-sm)', cursor:'pointer', fontWeight:600, fontFamily:'inherit' },
+  btnChat:     { marginTop:'0.4rem', width:'100%', background:'#eff6ff', color:'#1d4ed8', border:'1px solid #93c5fd', padding:'0.4rem', borderRadius:'var(--radius-sm)', cursor:'pointer', fontWeight:600, fontSize:'0.83rem', fontFamily:'inherit' },
 
   /* Sedes */
   addLocBtn:  { background:'var(--green-light)', color:'var(--green)', border:'1.5px solid var(--green-border)', padding:'0.4rem 0.9rem', borderRadius:'20px', cursor:'pointer', fontWeight:600, fontSize:'0.83rem', fontFamily:'inherit' },
@@ -781,6 +881,17 @@ const s = {
   locTab:     { padding:'0.35rem 0.8rem', border:'1.5px solid var(--border)', borderRadius:'20px', background:'var(--bg)', cursor:'pointer', fontSize:'0.82rem', fontWeight:500, fontFamily:'inherit', display:'flex', alignItems:'center', gap:'0.3rem', transition:'all 0.15s' },
   locTabActive:{ background:'var(--green)', color:'#fff', border:'1.5px solid var(--green)' },
   onlineDot:  { width:'7px', height:'7px', borderRadius:'50%', background:'#22c55e' },
+
+  /* Live tracking */
+  liveBox:      { background:'#fff7f7', border:'1px solid #fecaca', borderRadius:'var(--radius)', padding:'0.85rem', marginBottom:'0.9rem' },
+  liveBoxRow:   { display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'0.6rem' },
+  liveTitleTxt: { fontWeight:600, fontSize:'0.88rem', color:'#111827', display:'block' },
+  liveHint:     { display:'block', fontSize:'0.76rem', color:'#9ca3af', marginTop:'0.2rem' },
+  liveCoords:   { display:'block', fontSize:'0.73rem', color:'#6b7280', marginTop:'0.2rem', fontFamily:'monospace' },
+  liveStartBtn: { background:'#ef4444', color:'#fff', border:'none', borderRadius:'var(--radius-sm)', padding:'0.42rem 0.85rem', fontWeight:600, cursor:'pointer', fontSize:'0.83rem', whiteSpace:'nowrap', flexShrink:0 },
+  liveStopBtn:  { background:'#fee2e2', color:'#b91c1c', border:'1px solid #fecaca', borderRadius:'var(--radius-sm)', padding:'0.42rem 0.85rem', fontWeight:600, cursor:'pointer', fontSize:'0.83rem', whiteSpace:'nowrap', flexShrink:0 },
+  liveBanner:   { display:'flex', alignItems:'center', gap:'0.45rem', fontSize:'0.78rem', color:'#b91c1c', marginTop:'0.6rem', fontWeight:500 },
+  livePulse:    { display:'inline-block', width:'8px', height:'8px', borderRadius:'50%', background:'#ef4444', animation:'ping 1s infinite', flexShrink:0 },
 
   /* Productos */
   emojiRow:    { display:'flex', flexWrap:'wrap', gap:'0.25rem', marginBottom:'0.6rem' },

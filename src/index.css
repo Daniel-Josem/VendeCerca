@@ -204,6 +204,31 @@ button, input, select, textarea { font-family: inherit; }
   animation: countUp 0.5s ease both;
 }
 
+/* ── MARCADOR VENDEDOR EN VIVO (pin rojo pulsante) ── */
+.vendor-live-marker {
+  position: relative;
+  width: 46px; height: 46px;
+  background: linear-gradient(135deg, #ef4444, #f97316);
+  border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+  border: 3px solid #fff;
+  box-shadow: 0 4px 14px rgba(239,68,68,0.55);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 0.15s;
+}
+.vendor-live-marker:hover { transform: rotate(-45deg) scale(1.15); }
+.vendor-live-ring {
+  position: absolute;
+  inset: -9px;
+  border-radius: 50% 50% 50% 0;
+  border: 2.5px solid rgba(239,68,68,0.55);
+  animation: liveRing 1.8s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes liveRing {
+  0%   { transform: scale(0.8); opacity: 1; }
+  100% { transform: scale(1.45); opacity: 0; }
+}
+
 /* ── HOVER EFFECTS ───────────────────────────────── */
 .feat-card-hover:hover {
   box-shadow: 0 8px 28px rgba(45,122,45,0.13) !important;

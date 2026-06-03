@@ -25,6 +25,26 @@ function makeVendorIcon(emoji = '🏪') {
   return _iconCache[emoji];
 }
 
+// Ícono rojo pulsante para vendedores en vivo
+const _liveIconCache = {};
+function makeVendorLiveIcon(emoji = '🏪') {
+  if (!_liveIconCache[emoji]) {
+    _liveIconCache[emoji] = L.divIcon({
+      className: '',
+      html: `<div class="vendor-live-marker"><div class="vendor-live-ring"></div><span class="vendor-marker-icon">${emoji}</span></div>`,
+      iconSize: [46, 46],
+      iconAnchor: [23, 46],
+      popupAnchor: [0, -50],
+    });
+  }
+  return _liveIconCache[emoji];
+}
+
+// liveLocation fresca = actualizada hace menos de 5 min
+function isLiveFresh(v) {
+  return !!(v.liveLocation?.lat && v.liveLocation?.updatedAt && Date.now() - v.liveLocation.updatedAt < 300_000);
+}
+
 function haversineDistance(lat1, lng1, lat2, lng2) {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -112,7 +132,8 @@ export default function Home() {
   function flyToSede(v, loc) {
     if (!mapRef.current || !loc.lat) return;
     mapRef.current.flyTo([loc.lat, loc.lng], 17, { duration: 1.2 });
-    setTimeout(() => markerRefs.current[`${v.id}-${loc.id}`]?.openPopup(), 1300);
+    const key = loc.id === 'live' ? `${v.id}-live` : `${v.id}-${loc.id}`;
+    setTimeout(() => markerRefs.current[key]?.openPopup(), 1300);
   }
 
   // Monta el mapa la primera vez que el usuario cambia a la vista mapa
@@ -132,7 +153,9 @@ export default function Home() {
   function goToVendorOnMap(e, v) {
     e.stopPropagation();
     const onlineLocs = v.locations?.filter(l => l.isOnline && l.lat) || [];
-    const loc = onlineLocs[0] || (v.location?.lat ? { id: 'main', ...v.location } : null);
+    const loc = isLiveFresh(v)
+      ? { id: 'live', lat: v.liveLocation.lat, lng: v.liveLocation.lng }
+      : (onlineLocs[0] || (v.location?.lat ? { id: 'main', ...v.location } : null));
     if (!loc) return;
     setSelected(v);
     pendingFlyRef.current = { v, loc };
@@ -169,7 +192,9 @@ export default function Home() {
       let distance = null;
       if (userPos) {
         const onlineLocs = v.locations?.filter(l => l.isOnline && l.lat) || [];
-        if (onlineLocs.length > 0) {
+        if (isLiveFresh(v)) {
+          distance = haversineDistance(userPos.lat, userPos.lng, v.liveLocation.lat, v.liveLocation.lng);
+        } else if (onlineLocs.length > 0) {
           distance = Math.min(...onlineLocs.map(l => haversineDistance(userPos.lat, userPos.lng, l.lat, l.lng)));
         } else if (v.location?.lat) {
           distance = haversineDistance(userPos.lat, userPos.lng, v.location.lat, v.location.lng);
@@ -187,6 +212,11 @@ export default function Home() {
   function selectVendor(v) {
     if (selectedVendor?.id === v.id) { setSelected(null); return; }
     setSelected(v);
+    if (isLiveFresh(v)) {
+      if (isMobile) setActiveView('map');
+      flyToSede(v, { id: 'live', lat: v.liveLocation.lat, lng: v.liveLocation.lng });
+      return;
+    }
     const onlineLocs = v.locations?.filter(l => l.isOnline && l.lat) || [];
     if (onlineLocs.length === 1) {
       if (isMobile) setActiveView('map');
@@ -321,7 +351,10 @@ export default function Home() {
                     : <div style={s.avatar}>{v.name?.[0]?.toUpperCase()}</div>
                   }
                   <div style={s.cardInfo}>
-                    <div style={s.vendorName}>{v.name}</div>
+                    <div style={{ display:'flex', alignItems:'center', gap:'0.35rem', flexWrap:'wrap' }}>
+                      <span style={s.vendorName}>{v.name}</span>
+                      {isLiveFresh(v) && <span style={s.liveBadge}>🔴 En vivo</span>}
+                    </div>
                     {v.rating > 0 && (
                       <div style={s.rating}>
                         {'⭐'.repeat(Math.round(v.rating))} <span style={s.ratingNum}>{v.rating.toFixed(1)}</span>
@@ -537,14 +570,57 @@ export default function Home() {
             </Marker>
           )}
           {filtered.flatMap(v => {
-            // Soporte multi-sede y formato antiguo
+            const emoji = v.products?.[0]?.emoji || '🏪';
+            const fresh = isLiveFresh(v);
+
+            // Vendedor en vivo: pin rojo pulsante en su posición actual
+            if (fresh) {
+              return [(
+                <Marker
+                  key={`${v.id}-live`}
+                  position={[v.liveLocation.lat, v.liveLocation.lng]}
+                  icon={makeVendorLiveIcon(emoji)}
+                  ref={el => { if (el) markerRefs.current[`${v.id}-live`] = el; }}
+                >
+                  <Popup>
+                    <div style={s.popup}>
+                      <div style={s.popupHead}>
+                        <div>
+                          <strong style={s.popupName}>{v.name}</strong>
+                          <div style={{ fontSize:'0.73rem', color:'#ef4444', fontWeight:600, marginTop:'0.1rem' }}>
+                            📡 En vivo · hace {Math.round((Date.now() - v.liveLocation.updatedAt) / 1000)}s
+                          </div>
+                        </div>
+                        {v.rating > 0 && <span style={s.popupRating}>⭐ {v.rating.toFixed(1)}</span>}
+                      </div>
+                      <div style={s.popupProducts}>
+                        {v.products?.slice(0, 3).map(p => (
+                          <div key={p.id} style={s.popupProduct}>
+                            <span>{p.emoji} {p.name}</span>
+                            <strong style={{ color: 'var(--green)' }}>${p.price}/{p.unit}</strong>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={s.popupActions}>
+                        {waUrl(v) && (
+                          <a href={waUrl(v)} target="_blank" rel="noreferrer" style={s.popupWA}>📱 WhatsApp</a>
+                        )}
+                        <Link to={`/vendor/${v.id}`} style={s.popupProfile}>Ver perfil →</Link>
+                      </div>
+                    </div>
+                  </Popup>
+                </Marker>
+              )];
+            }
+
+            // Vendedor con sedes fijas
             const locs = v.locations?.filter(l => l.isOnline && l.lat && l.lng)
               || (v.location?.lat ? [{ id: 'main', lat: v.location.lat, lng: v.location.lng, name: '' }] : []);
             return locs.map(loc => (
               <Marker
                 key={`${v.id}-${loc.id}`}
                 position={[loc.lat, loc.lng]}
-                icon={makeVendorIcon(v.products?.[0]?.emoji || '🏪')}
+                icon={makeVendorIcon(emoji)}
                 ref={el => { if (el) markerRefs.current[v.id] = el; }}
               >
                 <Popup>
@@ -694,6 +770,7 @@ const s = {
   ratingNum: { color: 'var(--text-2)', fontWeight: 600 },
   distTag: { fontSize:'0.82rem', fontWeight:700, padding:'0.25rem 0.6rem', borderRadius:'20px', whiteSpace:'nowrap', flexShrink:0, border:'1px solid rgba(0,0,0,0.06)' },
   nearestBadge: { background:'linear-gradient(135deg,#fef3c7,#fde68a)', color:'#92400e', fontSize:'0.75rem', fontWeight:700, padding:'0.25rem 0.7rem', borderRadius:'20px', marginBottom:'0.4rem', display:'inline-block', border:'1px solid #fcd34d' },
+  liveBadge: { background:'#fee2e2', color:'#b91c1c', fontSize:'0.7rem', fontWeight:700, padding:'0.12rem 0.45rem', borderRadius:'20px', border:'1px solid #fecaca', whiteSpace:'nowrap', flexShrink:0 },
   matchRow: { display:'flex', flexWrap:'wrap', gap:'0.3rem', margin:'0.1rem 0' },
   matchTag: { background:'#f0fdf4', color:'#166534', fontSize:'0.78rem', padding:'0.22rem 0.55rem', borderRadius:'20px', border:'1px solid #bbf7d0', fontWeight:500 },
   tagRow: { display: 'flex', flexWrap: 'wrap', gap: '0.25rem', marginBottom: '0.4rem' },
