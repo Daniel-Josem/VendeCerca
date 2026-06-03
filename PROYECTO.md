@@ -114,6 +114,10 @@ public/
 11. **Stats para vendedores** — Hoy/semana/totales, ingresos, producto estrella
 12. **Notificaciones pedidos** — Badge navbar + toast automático al cambio de estado
 13. **Panel de admin** — Métricas globales, gestión vendedores, historial pedidos
+14. **Chat en tiempo real** — ChatDrawer en pedidos activos para vendedor y comprador (subcolección Firestore orders/{id}/messages)
+15. **Notificaciones push** — FCM via Vercel API route (`api/notify-vendor.js`). El vendedor recibe push aunque tenga la app cerrada cuando llega un pedido. VAPID key en `.env` como `VITE_FIREBASE_VAPID_KEY`.
+16. **Zonas frecuentes** — El vendedor guarda sus spots habituales (GPS o posición del mapa) y los aplica a cualquier sede con un clic. Guardado en `vendors/{uid}.savedZones`.
+17. **Modo oscuro** — Toggle 🌙/☀️ en Navbar. ThemeContext guarda preferencia en localStorage, aplica `data-theme` al `<html>`. Variables CSS en `index.css`.
 
 ---
 
@@ -152,6 +156,14 @@ service cloud.firestore {
     match /reviews/{reviewId} {
       allow read: if true;
       allow write: if request.auth != null;
+    }
+    match /orders/{orderId}/messages/{messageId} {
+      allow read: if request.auth.uid == get(/databases/$(database)/documents/orders/$(orderId)).data.buyerId
+                  || request.auth.uid == get(/databases/$(database)/documents/orders/$(orderId)).data.vendorId
+                  || isAdmin();
+      allow create: if (request.auth.uid == get(/databases/$(database)/documents/orders/$(orderId)).data.buyerId
+                    || request.auth.uid == get(/databases/$(database)/documents/orders/$(orderId)).data.vendorId)
+                   && request.resource.data.senderId == request.auth.uid;
     }
   }
 }

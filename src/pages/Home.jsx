@@ -312,7 +312,7 @@ export default function Home() {
             <div style={s.empty} className="anim-fade-in">
               <div style={{ fontSize: '2.5rem', marginBottom: '0.6rem' }}>🗺️</div>
               <p style={{ fontWeight: 600, marginBottom: '0.3rem' }}>Sin vendedores cerca</p>
-              <p style={{ fontSize: '0.85rem', color: '#9ca3af' }}>Intenta más tarde o amplía la búsqueda</p>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-3)' }}>Intenta más tarde o amplía la búsqueda</p>
             </div>
           )}
 
@@ -628,7 +628,7 @@ export default function Home() {
                     <div style={s.popupHead}>
                       <div>
                         <strong style={s.popupName}>{v.name}</strong>
-                        {loc.name && <div style={{ fontSize:'0.75rem', color:'#888' }}>📍 {loc.name}</div>}
+                        {loc.name && <div style={{ fontSize:'0.75rem', color:'var(--text-3)' }}>📍 {loc.name}</div>}
                       </div>
                       {v.rating > 0 && <span style={s.popupRating}>⭐ {v.rating.toFixed(1)}</span>}
                     </div>
@@ -702,7 +702,7 @@ const s = {
   /* Sidebar */
   sidebar: {
     width: '340px', minWidth: '280px', display: 'flex', flexDirection: 'column',
-    background: '#fff', borderRight: '1px solid var(--border)',
+    background: 'var(--card)', borderRight: '1px solid var(--border)',
     overflow: 'hidden',
   },
 
@@ -710,14 +710,14 @@ const s = {
   tabBar: {
     position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 1002,
     display: 'flex', height: '56px',
-    background: '#fff', borderTop: '1px solid var(--border)',
+    background: 'var(--card)', borderTop: '1px solid var(--border)',
     boxShadow: '0 -4px 16px rgba(0,0,0,0.08)',
   },
   tabBtn: {
     flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
     justifyContent: 'center', gap: '0.1rem',
     background: 'none', border: 'none', cursor: 'pointer',
-    color: '#9ca3af', fontSize: '0.7rem', fontWeight: 600,
+    color: 'var(--text-3)', fontSize: '0.7rem', fontWeight: 600,
     fontFamily: 'inherit', transition: 'color 0.15s', position: 'relative',
   },
   tabBtnActive: { color: 'var(--green)' },
@@ -739,7 +739,7 @@ const s = {
   },
   clearBtn: {
     position: 'absolute', right: '0.7rem', background: 'none',
-    border: 'none', cursor: 'pointer', color: '#9ca3af', fontSize: '0.85rem',
+    border: 'none', cursor: 'pointer', color: 'var(--text-3)', fontSize: '0.85rem',
   },
   countRow: { display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0 1rem 0.5rem' },
   countDot: { width: '8px', height: '8px', borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 0 3px rgba(34,197,94,0.2)', animation: 'ping 2s ease-in-out infinite' },
@@ -749,7 +749,7 @@ const s = {
 
   /* Card */
   card: {
-    background: '#fff', borderRadius: 'var(--radius)',
+    background: 'var(--card)', borderRadius: 'var(--radius)',
     padding: '0.9rem', cursor: 'pointer',
     border: '1.5px solid var(--border)',
     transition: 'border-color 0.2s, box-shadow 0.2s, transform 0.15s',
@@ -825,7 +825,7 @@ const s = {
   mapLoadingDot: { width: '8px', height: '8px', borderRadius: '50%', background: 'var(--green)', animation: 'ping 1s ease-in-out infinite' },
 
   /* Popup */
-  popup: { padding: '0.9rem', minWidth: '180px' },
+  popup: { padding: '0.9rem', minWidth: '180px', background: 'var(--card)', color: 'var(--text)' },
   popupHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' },
   popupName: { fontSize: '0.95rem', color: 'var(--text)' },
   popupRating: { fontSize: '0.8rem', color: '#f59e0b', fontWeight: 600 },

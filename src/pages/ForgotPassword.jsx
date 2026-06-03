@@ -145,7 +145,7 @@ export default function ForgotPassword() {
         <div style={{ textAlign:'center', padding:'1rem 0' }}>
           <div style={{ fontSize:'3.5rem', marginBottom:'1rem' }}>✅</div>
           <h2 style={{ ...s.title, color:'#16a34a' }}>¡Contraseña actualizada!</h2>
-          <p style={{ color:'#6b7280', margin:'0.75rem 0 1.5rem', lineHeight:1.5 }}>
+          <p style={{ color:'var(--text-2)', margin:'0.75rem 0 1.5rem', lineHeight:1.5 }}>
             Ya puedes iniciar sesión con tu nueva contraseña.
           </p>
           <Link to="/login" style={s.btn}>Ir a iniciar sesión →</Link>
@@ -181,7 +181,7 @@ export default function ForgotPassword() {
           <h2 style={s.title}>Ingresa el código</h2>
           <p style={s.sub}>
             Enviamos un código de 6 dígitos a<br />
-            <strong style={{ color:'#111827' }}>{email}</strong>
+            <strong style={{ color:'var(--text)' }}>{email}</strong>
           </p>
           <form onSubmit={handleVerifyCode} style={s.form}>
             <div style={s.field}>
@@ -198,7 +198,7 @@ export default function ForgotPassword() {
               {loading ? '⏳ Verificando...' : 'Verificar código →'}
             </button>
           </form>
-          <p style={{ textAlign:'center', marginTop:'1rem', fontSize:'0.85rem', color:'#6b7280' }}>
+          <p style={{ textAlign:'center', marginTop:'1rem', fontSize:'0.85rem', color:'var(--text-2)' }}>
             ¿No llegó?{' '}
             <button style={s.linkBtn} onClick={() => { setStep('email'); setCode(''); }}>Reenviar código</button>
           </p>
@@ -210,16 +210,16 @@ export default function ForgotPassword() {
 
 const s = {
   page:    { minHeight:'calc(100vh - 60px)', display:'flex', alignItems:'center', justifyContent:'center', background:'linear-gradient(135deg, #0d3b0d, #2d7a2d)', padding:'1.5rem' },
-  card:    { background:'#fff', padding:'2.5rem', borderRadius:'20px', width:'100%', maxWidth:'400px', boxShadow:'0 24px 64px rgba(0,0,0,0.25)' },
+  card:    { background:'var(--card)', padding:'2.5rem', borderRadius:'20px', width:'100%', maxWidth:'400px', boxShadow:'0 24px 64px rgba(0,0,0,0.25)' },
   logoArea:{ display:'flex', alignItems:'center', gap:'0.6rem', marginBottom:'1.8rem', justifyContent:'center' },
   logoIcon:{ fontSize:'1.8rem' },
   brand:   { fontSize:'1.5rem', fontWeight:800, color:'#1a5c1a', letterSpacing:'-0.5px' },
-  title:   { fontSize:'1.3rem', fontWeight:700, color:'#111827', marginBottom:'0.4rem', textAlign:'center' },
-  sub:     { color:'#6b7280', fontSize:'0.9rem', marginBottom:'1.5rem', textAlign:'center', lineHeight:1.5 },
+  title:   { fontSize:'1.3rem', fontWeight:700, color:'var(--text)', marginBottom:'0.4rem', textAlign:'center' },
+  sub:     { color:'var(--text-2)', fontSize:'0.9rem', marginBottom:'1.5rem', textAlign:'center', lineHeight:1.5 },
   form:    { display:'flex', flexDirection:'column', gap:'1rem' },
   field:   { display:'flex', flexDirection:'column', gap:'0.35rem' },
-  label:   { fontSize:'0.82rem', fontWeight:600, color:'#374151' },
-  input:   { background:'#f9fafb' },
+  label:   { fontSize:'0.82rem', fontWeight:600, color:'var(--text)' },
+  input:   { background:'var(--bg)' },
   btn:     { display:'block', textAlign:'center', padding:'0.9rem', background:'linear-gradient(135deg, #1a5c1a, #2d7a2d)', color:'#fff', border:'none', borderRadius:'10px', fontSize:'1rem', cursor:'pointer', fontWeight:700, fontFamily:'inherit', textDecoration:'none', transition:'opacity 0.2s' },
   linkBtn: { background:'none', border:'none', color:'#2d7a2d', fontWeight:700, cursor:'pointer', fontSize:'0.85rem', fontFamily:'inherit', padding:0 },
   footer:  { textAlign:'center', marginTop:'1.5rem' },

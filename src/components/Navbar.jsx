@@ -6,13 +6,17 @@ import { auth, db } from '../firebase/config';
 import { useAuth } from '../context/AuthContext';
 import useIsMobile from '../hooks/useIsMobile';
 import { useToast } from '../context/ToastContext';
+import { useTheme } from '../context/ThemeContext';
 
 export default function Navbar() {
   const { currentUser, userRole, userName } = useAuth();
   const navigate  = useNavigate();
   const location  = useLocation();
   const isMobile  = useIsMobile();
-  const toast = useToast();
+  const toast     = useToast();
+  const { dark, toggle } = useTheme();
+  const PUBLIC_ROUTES = ['/', '/login', '/register', '/reset-password'];
+  const showThemeBtn  = currentUser && !PUBLIC_ROUTES.includes(location.pathname);
   const [pendingCount, setPendingCount] = useState(0);
   const [orderBadge,   setOrderBadge]   = useState(0);
   const [scrolled, setScrolled]         = useState(false);
@@ -136,6 +140,11 @@ export default function Navbar() {
                   <Link to="/register" style={styles.registerBtn}>Registrarse</Link>
                 </>
               )}
+              {showThemeBtn && (
+                <button onClick={toggle} style={styles.themeBtn} title={dark ? 'Modo claro' : 'Modo oscuro'}>
+                  {dark ? '☀️' : '🌙'}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -168,6 +177,11 @@ export default function Navbar() {
                 <Link to="/admin" style={{ ...styles.mobileLink, color:'#1d4ed8', fontWeight:700 }}>🛡️ Admin</Link>
               )}
               <div style={styles.mobileDivider} />
+              {showThemeBtn && (
+                <button onClick={toggle} style={styles.mobileThemeBtn}>
+                  {dark ? '☀️ Modo claro' : '🌙 Modo oscuro'}
+                </button>
+              )}
               <button onClick={handleLogout} style={styles.mobileLogout}>Cerrar sesión</button>
             </>
           ) : (
@@ -229,6 +243,20 @@ const styles = {
     boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
   },
 
+  themeBtn: {
+    background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.25)',
+    borderRadius: '8px', width: '36px', height: '36px',
+    fontSize: '1rem', cursor: 'pointer', display: 'flex',
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  mobileThemeBtn: {
+    margin: '0.25rem 1.25rem 0',
+    padding: '0.75rem', background: 'rgba(45,122,45,0.08)', color: 'var(--text)',
+    border: '1px solid var(--border)', borderRadius: '10px', fontWeight: 600,
+    fontSize: '0.9rem', cursor: 'pointer', textAlign: 'left',
+    fontFamily: 'inherit',
+  },
+
   /* Hamburger */
   hamburger: {
     background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.25)',
@@ -247,21 +275,21 @@ const styles = {
   /* Mobile menu */
   mobileMenu: {
     position: 'fixed', top: '60px', left: 0, right: 0, zIndex: 999,
-    background: '#fff', borderBottom: '1px solid #e5e7eb',
+    background: 'var(--card)', borderBottom: '1px solid var(--border)',
     boxShadow: '0 8px 32px rgba(0,0,0,0.15)',
     display: 'flex', flexDirection: 'column', padding: '0.75rem 0',
   },
   mobileGreeting: {
     display: 'flex', alignItems: 'center', gap: '0.5rem',
     padding: '0.5rem 1.25rem 0.75rem',
-    fontSize: '0.95rem', fontWeight: 600, color: '#111827',
+    fontSize: '0.95rem', fontWeight: 600, color: 'var(--text)',
   },
   mobileGreetingIcon: { fontSize: '1.2rem' },
   mobileDivider: { height: '1px', background: '#f3f4f6', margin: '0.25rem 0' },
   mobileLink: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     padding: '0.85rem 1.25rem', textDecoration: 'none',
-    color: '#111827', fontSize: '0.95rem', fontWeight: 500,
+    color: 'var(--text)', fontSize: '0.95rem', fontWeight: 500,
     transition: 'background 0.12s',
   },
   mobileLinkHighlight: { color: '#2d7a2d', fontWeight: 700 },

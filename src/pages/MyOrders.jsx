@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import BackButton from '../components/BackButton';
 import RatingModal from '../components/RatingModal';
 import OrderModal from '../components/OrderModal';
+import ChatDrawer from '../components/ChatDrawer';
 import { useToast } from '../context/ToastContext';
 import usePageMeta from '../hooks/usePageMeta';
 
@@ -45,7 +46,7 @@ function calcTotal(products) {
   return (products || []).reduce((sum, p) => sum + (parseFloat(p.price)||0) * (p.qty||1), 0);
 }
 
-function OrderSection({ group, orders, ratedOrderIds, onRate, onRepeat }) {
+function OrderSection({ group, orders, ratedOrderIds, onRate, onRepeat, onChat }) {
   const [open, setOpen] = useState(group.defaultOpen);
   const filtered = orders.filter(o => group.statuses.includes(o.status));
   if (filtered.length === 0) return null;
@@ -119,6 +120,9 @@ function OrderSection({ group, orders, ratedOrderIds, onRate, onRepeat }) {
                         ? <span style={s.ratedBadge}>⭐ Reseña enviada</span>
                         : <button style={s.rateBtn} onClick={() => onRate(order)}>⭐ Calificar</button>
                     )}
+                    {order.status !== 'cancelado' && (
+                      <button style={s.chatBtn} onClick={() => onChat(order)}>💬 Chat</button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -139,6 +143,7 @@ export default function MyOrders() {
   const [loading, setLoading]       = useState(true);
   const [ratingOrder,  setRatingOrder]  = useState(null);
   const [repeatModal,  setRepeatModal]  = useState(null);
+  const [chatOrder,    setChatOrder]    = useState(null);
   const [ratedOrderIds, setRatedOrderIds] = useState(new Set());
 
   useEffect(() => {
@@ -209,6 +214,7 @@ export default function MyOrders() {
                 ratedOrderIds={ratedOrderIds}
                 onRate={setRatingOrder}
                 onRepeat={handleRepeat}
+                onChat={setChatOrder}
               />
             ))}
           </div>
@@ -230,6 +236,9 @@ export default function MyOrders() {
           locationId={repeatModal.locationId}
           onClose={() => setRepeatModal(null)}
         />
+      )}
+      {chatOrder && (
+        <ChatDrawer order={chatOrder} onClose={() => setChatOrder(null)} />
       )}
     </div>
   );
@@ -281,6 +290,7 @@ const s = {
   repeatBtn:  { background:'#eff6ff', color:'#1d4ed8', border:'1px solid #93c5fd', padding:'0.3rem 0.8rem', borderRadius:'20px', fontSize:'0.78rem', fontWeight:700, cursor:'pointer', fontFamily:'inherit' },
   rateBtn:    { background:'#fef3c7', color:'#92400e', border:'1px solid #fcd34d', padding:'0.3rem 0.8rem', borderRadius:'20px', fontSize:'0.78rem', fontWeight:700, cursor:'pointer', fontFamily:'inherit' },
   ratedBadge: { background:'#f0fdf4', color:'#166534', border:'1px solid #86efac', padding:'0.3rem 0.8rem', borderRadius:'20px', fontSize:'0.78rem', fontWeight:600 },
+  chatBtn:    { background:'#eff6ff', color:'#1d4ed8', border:'1px solid #93c5fd', padding:'0.3rem 0.8rem', borderRadius:'20px', fontSize:'0.78rem', fontWeight:700, cursor:'pointer', fontFamily:'inherit' },
 
   empty:      { background:'#fff', borderRadius:'var(--radius-lg)', padding:'3rem 2rem', textAlign:'center', boxShadow:'var(--shadow-sm)', border:'1px solid var(--border)', display:'flex', flexDirection:'column', alignItems:'center', gap:'0.8rem' },
   emptyIcon:  { fontSize:'3.5rem' },

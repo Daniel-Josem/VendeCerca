@@ -63,6 +63,19 @@ export default function OrderModal({ vendor, type, locationId, onClose }) {
       status:       'pendiente',
       createdAt:    serverTimestamp(),
     });
+
+    // Notificación push al vendedor (silencioso si falla)
+    fetch('/api/notify-vendor', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        vendorId:  vendor.id,
+        buyerName: userName || currentUser.email,
+        type,
+        products:  selectedProducts,
+      }),
+    }).catch(() => {});
+
     setLoading(false);
     setDone(true);
   }

@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
+import { ThemeProvider } from './context/ThemeContext';
 import Navbar from './components/Navbar';
 import ErrorBoundary from './components/ErrorBoundary';
 import Home from './pages/Home';
@@ -46,12 +47,14 @@ export default function App() {
   return (
     <ErrorBoundary>
       <AuthProvider>
-        <ToastProvider>
-          <BrowserRouter>
-            <Navbar />
-            <AnimatedRoutes />
-          </BrowserRouter>
-        </ToastProvider>
+        <ThemeProvider>
+          <ToastProvider>
+            <BrowserRouter>
+              <Navbar />
+              <AnimatedRoutes />
+            </BrowserRouter>
+          </ToastProvider>
+        </ThemeProvider>
       </AuthProvider>
     </ErrorBoundary>
   );

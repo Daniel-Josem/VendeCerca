@@ -7,6 +7,7 @@ import BackButton from '../components/BackButton';
 import ChatDrawer from '../components/ChatDrawer';
 import { v4 as uuidv4 } from 'uuid';
 import { useToast } from '../context/ToastContext';
+import { requestFCMToken } from '../firebase/messaging';
 import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -153,6 +154,10 @@ export default function VendorDashboard() {
   const watchIdRef    = useRef(null);
   const lastLiveWrite = useRef(0);
   const [gpsMsg,        setGpsMsg]        = useState('');
+  const [savedZones,    setSavedZones]    = useState([]);
+  const [newZoneName,   setNewZoneName]   = useState('');
+  const [savingZone,    setSavingZone]    = useState(false);
+  const [applyZoneId,   setApplyZoneId]   = useState(null);
 
   useEffect(() => {
     if (!currentUser) { navigate('/login'); return; }
@@ -185,15 +190,26 @@ export default function VendorDashboard() {
       setLocations(locs);
       setProdLocId(locs[0]?.id || null);
       setActiveLocId(null);
+      setSavedZones(d.savedZones || []);
     });
   }, [currentUser]);
 
   // ── Pedir permiso de notificaciones al cargar ───
   useEffect(() => {
     if (!currentUser || userRole !== 'vendor') return;
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission().then(p => setNotifPerm(p));
-    }
+    const setup = async () => {
+      if (!('Notification' in window)) return;
+      let perm = Notification.permission;
+      if (perm === 'default') {
+        perm = await Notification.requestPermission();
+        setNotifPerm(perm);
+      }
+      if (perm === 'granted') {
+        const token = await requestFCMToken();
+        if (token) updateDoc(doc(db, 'vendors', currentUser.uid), { fcmToken: token });
+      }
+    };
+    setup();
   }, [currentUser, userRole]);
 
   // ── Sonido de alerta (Web Audio API) ────────────
@@ -343,6 +359,49 @@ export default function VendorDashboard() {
     await updateDoc(doc(db, 'vendors', currentUser.uid), { liveLocation: deleteField() });
   }
 
+  // ── Zonas frecuentes ─────────────────────────────
+  async function saveGPSAsZone() {
+    if (!newZoneName.trim()) { toast.warning('Escribe un nombre para la zona'); return; }
+    setSavingZone(true);
+    navigator.geolocation?.getCurrentPosition(
+      async ({ coords }) => {
+        const zone = { id: uuidv4(), name: newZoneName.trim(), lat: coords.latitude, lng: coords.longitude, savedAt: Date.now() };
+        const updated = [...savedZones, zone];
+        setSavedZones(updated);
+        await updateDoc(doc(db, 'vendors', currentUser.uid), { savedZones: updated });
+        setNewZoneName('');
+        setSavingZone(false);
+        toast.success(`Zona "${zone.name}" guardada`);
+      },
+      () => { toast.error('GPS no disponible'); setSavingZone(false); }
+    );
+  }
+
+  async function saveActiveLocAsZone() {
+    const loc = locations.find(l => l.id === activeLocId);
+    if (!loc?.lat) { toast.warning('La sede seleccionada no tiene ubicación'); return; }
+    if (!newZoneName.trim()) { toast.warning('Escribe un nombre para la zona'); return; }
+    const zone = { id: uuidv4(), name: newZoneName.trim(), lat: loc.lat, lng: loc.lng, savedAt: Date.now() };
+    const updated = [...savedZones, zone];
+    setSavedZones(updated);
+    await updateDoc(doc(db, 'vendors', currentUser.uid), { savedZones: updated });
+    setNewZoneName('');
+    toast.success(`Zona "${zone.name}" guardada`);
+  }
+
+  async function applyZoneToLoc(zone, locId) {
+    const updated = locations.map(l => l.id === locId ? { ...l, lat: zone.lat, lng: zone.lng } : l);
+    await saveLocs(updated);
+    setApplyZoneId(null);
+    toast.success(`Ubicación de "${locations.find(l => l.id === locId)?.name}" actualizada`);
+  }
+
+  async function deleteZone(zoneId) {
+    const updated = savedZones.filter(z => z.id !== zoneId);
+    setSavedZones(updated);
+    await updateDoc(doc(db, 'vendors', currentUser.uid), { savedZones: updated });
+  }
+
   // ── Productos por sede ───────────────────────────
   const prodLoc = locations.find(l => l.id===prodLocId) || locations[0];
   const currentProducts = prodLoc?.products || [];
@@ -433,7 +492,10 @@ export default function VendorDashboard() {
       // URL optimizada: 300x300, circular, formato automático
       const optimized = data.secure_url.replace('/upload/', '/upload/w_300,h_300,c_fill,f_auto,q_auto/');
       setPhotoURL(optimized);
-      await updateDoc(doc(db, 'vendors', currentUser.uid), { photoURL: optimized });
+      await Promise.all([
+        updateDoc(doc(db, 'vendors', currentUser.uid), { photoURL: optimized }),
+        updateDoc(doc(db, 'users',   currentUser.uid), { photoURL: optimized }),
+      ]);
       toast.success('Foto de perfil actualizada');
     } catch (err) {
       toast.error('Error subiendo la foto. Intenta de nuevo.');
@@ -499,96 +561,78 @@ export default function VendorDashboard() {
     <div style={s.page}>
       <div style={s.container}>
 
-        {/* HEADER */}
-        <div style={s.header}>
-          <div style={s.headerLeft}>
-            <BackButton to="/" label="Volver al mapa" />
-            <div style={{ display:'flex', alignItems:'center', gap:'0.9rem' }}>
-              {/* Avatar con upload */}
-              <div style={s.avatarWrap} onClick={() => photoInputRef.current?.click()}
-                onMouseEnter={() => setAvatarHover(true)} onMouseLeave={() => setAvatarHover(false)}
-                title="Cambiar foto de perfil">
-                {uploadingPhoto ? (
-                  <div style={s.avatarUpload}><span style={s.spinner}>⏳</span></div>
-                ) : photoURL ? (
-                  <img src={photoURL} alt="foto" style={s.avatarImg} />
-                ) : (
-                  <div style={s.avatarPlaceholder}>{vendor.name?.[0]?.toUpperCase()}</div>
+        {/* HERO */}
+        <div style={s.heroCard}>
+          <BackButton to="/" label="← Volver al mapa" />
+          <div style={s.heroBody}>
+            <div style={s.avatarWrap} onClick={() => photoInputRef.current?.click()}
+              onMouseEnter={() => setAvatarHover(true)} onMouseLeave={() => setAvatarHover(false)}
+              title="Cambiar foto de perfil">
+              {uploadingPhoto ? (
+                <div style={s.avatarPlaceholder}><span>⏳</span></div>
+              ) : photoURL ? (
+                <img src={photoURL} alt="foto" style={s.avatarImg} />
+              ) : (
+                <div style={s.avatarPlaceholder}>{vendor.name?.[0]?.toUpperCase()}</div>
+              )}
+              <div style={{ ...s.avatarOverlay, opacity: avatarHover ? 1 : 0 }}>📷</div>
+              <input ref={photoInputRef} type="file" accept="image/*" style={{ display:'none' }} onChange={handlePhotoChange} />
+            </div>
+            <div style={s.heroInfo}>
+              <h2 style={s.heroName}>{vendor.name}</h2>
+              <p style={s.heroSub}>
+                <span style={{ ...s.heroDot, background: onlineCount > 0 ? '#4ade80' : 'rgba(255,255,255,0.4)' }} />
+                {onlineCount > 0 ? `${onlineCount} sede${onlineCount!==1?'s':''} en línea` : 'Todas offline'}
+              </p>
+              <div style={s.heroBadges}>
+                {pendingCount > 0 && (
+                  <span style={s.heroPendingBadge}>🔔 {pendingCount} nuevo{pendingCount>1?'s':''}</span>
                 )}
-                <div style={{ ...s.avatarOverlay, opacity: avatarHover ? 1 : 0 }}>📷</div>
-                <input ref={photoInputRef} type="file" accept="image/*" style={{ display:'none' }} onChange={handlePhotoChange} />
-              </div>
-              <div>
-                <h2 style={s.title}>Panel de Vendedor</h2>
-                <p style={s.subtitle}>Hola, {vendor.name} · {onlineCount} sede{onlineCount!==1?'s':''} en línea</p>
+                {notifPerm === 'granted' ? (
+                  <span style={s.heroNotifOn}>✓ Alertas activas</span>
+                ) : notifPerm === 'denied' ? (
+                  <span style={s.heroNotifOff}>🔕 Bloqueadas</span>
+                ) : (
+                  <button style={s.heroNotifBtn} onClick={async () => {
+                    const p = await Notification.requestPermission();
+                    setNotifPerm(p);
+                    if (p === 'granted') {
+                      const token = await requestFCMToken();
+                      if (token) updateDoc(doc(db, 'vendors', currentUser.uid), { fcmToken: token });
+                    }
+                  }}>🔔 Activar alertas</button>
+                )}
               </div>
             </div>
-          </div>
-          <div style={s.headerRight}>
-            {pendingCount > 0 && (
-              <div style={s.alertBadge}>🔔 {pendingCount} nuevo{pendingCount>1?'s':''}</div>
-            )}
-            {/* Estado de notificaciones */}
-            {notifPerm === 'granted' ? (
-              <span style={s.notifOn}>🔔 Alertas activas</span>
-            ) : notifPerm === 'denied' ? (
-              <span style={s.notifOff} title="Activa las notificaciones en la configuración del navegador">🔕 Alertas bloqueadas</span>
-            ) : (
-              <button style={s.notifBtn} onClick={() =>
-                Notification.requestPermission().then(p => setNotifPerm(p))
-              }>
-                🔔 Activar alertas
-              </button>
-            )}
           </div>
         </div>
 
         {/* ESTADÍSTICAS */}
         <div style={s.section}>
-          <h3 style={{ ...s.sectionTitle, marginBottom:'1rem' }}>📊 Estadísticas</h3>
-          <div style={s.statsGrid}>
-            <div style={s.statCard}>
-              <div style={s.statIcon}>📦</div>
-              <div style={s.statVal}>{todayAll.length}</div>
-              <div style={s.statLabel}>Pedidos hoy</div>
-            </div>
-            <div style={s.statCard}>
-              <div style={s.statIcon}>💰</div>
-              <div style={{ ...s.statVal, fontSize: todayRevenue > 99999 ? '1rem' : '1.3rem' }}>
-                ${todayRevenue.toLocaleString()}
-              </div>
-              <div style={s.statLabel}>Ingresos hoy</div>
-            </div>
-            <div style={s.statCard}>
-              <div style={s.statIcon}>📅</div>
-              <div style={s.statVal}>{weekAll.length}</div>
-              <div style={s.statLabel}>Últimos 7 días</div>
-            </div>
-            <div style={s.statCard}>
-              <div style={s.statIcon}>💳</div>
-              <div style={{ ...s.statVal, fontSize: weekRevenue > 99999 ? '1rem' : '1.3rem' }}>
-                ${weekRevenue.toLocaleString()}
-              </div>
-              <div style={s.statLabel}>Ingresos semana</div>
-            </div>
-            <div style={s.statCard}>
-              <div style={s.statIcon}>⭐</div>
-              <div style={s.statVal}>{vendor.rating ? vendor.rating.toFixed(1) : '—'}</div>
-              <div style={s.statLabel}>{vendor.ratingsCount || 0} reseña{(vendor.ratingsCount||0)!==1?'s':''}</div>
-            </div>
-            <div style={s.statCard}>
-              <div style={s.statIcon}>{topProd?.emoji || '🏆'}</div>
-              <div style={{ ...s.statVal, fontSize:'0.88rem', lineHeight:1.3 }}>{topProd?.name || '—'}</div>
-              <div style={s.statLabel}>Producto estrella</div>
-            </div>
+          <div style={s.sectionHead}>
+            <h3 style={s.sectionTitle}>📊 Estadísticas</h3>
+            {totalRevenue > 0 && (
+              <span style={s.totalRevPill}>
+                💰 Total: <strong>${totalRevenue.toLocaleString()}</strong>
+              </span>
+            )}
           </div>
-          {totalRevenue > 0 && (
-            <div style={s.totalRevBanner}>
-              💰 Ingresos totales:
-              <strong style={{ color:'var(--green)', fontSize:'1.05rem' }}>${totalRevenue.toLocaleString()}</strong>
-              <span style={{ color:'var(--text-3)', fontSize:'0.78rem' }}>({completed.length} pedido{completed.length!==1?'s':''} completado{completed.length!==1?'s':''})</span>
-            </div>
-          )}
+          <div style={s.statsGrid}>
+            {[
+              { icon:'📦', val: todayAll.length,    label:'Pedidos hoy',     accent:'#3b82f6' },
+              { icon:'💰', val: `$${todayRevenue.toLocaleString()}`, label:'Ingresos hoy', accent:'#10b981', small: todayRevenue > 99999 },
+              { icon:'📅', val: weekAll.length,     label:'Esta semana',     accent:'#8b5cf6' },
+              { icon:'💳', val: `$${weekRevenue.toLocaleString()}`, label:'Ingresos semana', accent:'#f59e0b', small: weekRevenue > 99999 },
+              { icon:'⭐', val: vendor.rating ? vendor.rating.toFixed(1) : '—', label:`${vendor.ratingsCount||0} reseña${(vendor.ratingsCount||0)!==1?'s':''}`, accent:'#eab308' },
+              { icon: topProd?.emoji||'🏆', val: topProd?.name||'—', label:'Producto estrella', accent:'#f97316', small: true },
+            ].map((st, i) => (
+              <div key={i} style={{ ...s.statCard, borderTop:`3px solid ${st.accent}` }}>
+                <div style={s.statIcon}>{st.icon}</div>
+                <div style={{ ...s.statVal, fontSize: st.small ? '0.85rem' : '1.3rem', color: st.accent }}>{st.val}</div>
+                <div style={s.statLabel}>{st.label}</div>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* PEDIDOS COLAPSABLES */}
@@ -694,6 +738,72 @@ export default function VendorDashboard() {
           </div>
         </div>
 
+        {/* ZONAS FRECUENTES */}
+        <div style={s.section}>
+          <h3 style={{ ...s.sectionTitle, marginBottom:'0.9rem' }}>⭐ Zonas frecuentes</h3>
+          <p style={{ fontSize:'0.8rem', color:'var(--text-3)', marginBottom:'0.9rem', marginTop:'-0.4rem' }}>
+            Guarda tus spots habituales y aplícalos a cualquier sede con un clic.
+          </p>
+
+          {/* Formulario para guardar zona nueva */}
+          <div style={s.zoneForm}>
+            <input
+              className="app-input"
+              style={{ flex:1, minWidth:0 }}
+              placeholder="Nombre del lugar (ej: Parque Central)"
+              value={newZoneName}
+              onChange={e => setNewZoneName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && saveGPSAsZone()}
+            />
+            <button style={s.zoneGpsBtn} onClick={saveGPSAsZone} disabled={savingZone}>
+              {savingZone ? '...' : '🛰️ GPS'}
+            </button>
+            {activeLocId && locations.find(l => l.id === activeLocId)?.lat && (
+              <button style={s.zoneMapBtn} onClick={saveActiveLocAsZone}>
+                📍 Del mapa
+              </button>
+            )}
+          </div>
+
+          {/* Lista de zonas */}
+          {savedZones.length === 0 ? (
+            <p style={s.empty}>Sin zonas guardadas aún.</p>
+          ) : (
+            <div style={{ display:'flex', flexDirection:'column', gap:'0.45rem', marginTop:'0.8rem' }}>
+              {savedZones.map(zone => (
+                <div key={zone.id} style={s.zoneCard}>
+                  <div style={s.zoneCardLeft}>
+                    <span style={s.zoneName}>⭐ {zone.name}</span>
+                    <span style={s.zoneCoords}>{zone.lat.toFixed(4)}, {zone.lng.toFixed(4)}</span>
+                  </div>
+                  <div style={s.zoneCardRight}>
+                    {applyZoneId === zone.id ? (
+                      <div style={s.zoneApplyPicker}>
+                        <span style={{ fontSize:'0.75rem', color:'var(--text-2)', flexShrink:0 }}>Aplicar a:</span>
+                        {locations.map(loc => (
+                          <button key={loc.id} style={s.zoneLocBtn} onClick={() => applyZoneToLoc(zone, loc.id)}>
+                            {loc.name}
+                          </button>
+                        ))}
+                        <button style={s.zoneCancelBtn} onClick={() => setApplyZoneId(null)}>✕</button>
+                      </div>
+                    ) : (
+                      <button style={s.zoneApplyBtn} onClick={() =>
+                        locations.length === 1
+                          ? applyZoneToLoc(zone, locations[0].id)
+                          : setApplyZoneId(zone.id)
+                      }>
+                        📍 Aplicar
+                      </button>
+                    )}
+                    <button style={s.locDeleteBtn} onClick={() => deleteZone(zone.id)}>🗑️</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* PRODUCTOS POR SEDE */}
         <div style={s.section}>
           <div style={s.sectionHead}>
@@ -726,11 +836,11 @@ export default function VendorDashboard() {
                 <div style={s.prodImgRow}>
                   <div style={s.prodImgPreview} onClick={() => prodImgRef.current?.click()}>
                     {uploadingProd ? (
-                      <span style={{ fontSize:'0.75rem', color:'#888' }}>Subiendo...</span>
+                      <span style={{ fontSize:'0.75rem', color:'var(--text-3)' }}>Subiendo...</span>
                     ) : form.imageURL ? (
                       <img src={form.imageURL} alt="producto" style={s.prodImgThumb} />
                     ) : (
-                      <span style={{ fontSize:'0.75rem', color:'#9ca3af', textAlign:'center', lineHeight:1.3 }}>📷<br/>Foto</span>
+                      <span style={{ fontSize:'0.75rem', color:'var(--text-3)', textAlign:'center', lineHeight:1.3 }}>📷<br/>Foto</span>
                     )}
                     <input ref={prodImgRef} type="file" accept="image/*" style={{ display:'none' }} onChange={handleProdImageChange} />
                   </div>
@@ -761,7 +871,7 @@ export default function VendorDashboard() {
                     }
                     <div style={{ flex:1 }}>
                       <div style={{ fontWeight:600, fontSize:'0.92rem' }}>{p.name}</div>
-                      <div style={{ fontSize:'0.78rem', color:'#666' }}>
+                      <div style={{ fontSize:'0.78rem', color:'var(--text-2)' }}>
                         ${p.price}/{p.unit}
                         {p.stock && <span style={{ marginLeft:'0.5rem', color: parseInt(p.stock)<=3?'#dc2626':'#2d7a2d', fontWeight:600 }}>
                           · Stock: {p.stock}
@@ -777,32 +887,6 @@ export default function VendorDashboard() {
           )}
         </div>
 
-        {/* PERFIL */}
-        <div style={s.section}>
-          <h3 style={s.sectionTitle}>👤 Perfil de contacto</h3>
-          <form onSubmit={handleSaveProfile} style={{ display:'flex', flexDirection:'column', gap:'0.9rem', marginTop:'0.8rem' }}>
-            <div style={{ display:'flex', flexDirection:'column', gap:'0.3rem' }}>
-              <label style={s.label}>📱 WhatsApp</label>
-              <div style={{ display:'flex', gap:'0.5rem' }}>
-                <select style={s.codeSelect} value={countryCode} onChange={e => setCountryCode(e.target.value)}>
-                  {COUNTRY_CODES.map(c => <option key={c.code} value={c.code}>{c.flag} {c.code} {c.name}</option>)}
-                </select>
-                <input className="app-input" placeholder="3001234567" value={phoneNumber}
-                  onChange={e => setPhoneNumber(e.target.value.replace(/\D/g,''))} style={{ flex:1 }} />
-              </div>
-              {phoneNumber && <p style={{ fontSize:'0.75rem', color:'#888' }}>wa.me/{countryCode.replace('+','')}{phoneNumber}</p>}
-            </div>
-            <div style={{ display:'flex', flexDirection:'column', gap:'0.3rem' }}>
-              <label style={s.label}>📝 Descripción</label>
-              <textarea className="app-input" style={{ minHeight:'60px', resize:'vertical' }}
-                placeholder="Frutas y verduras frescas..." value={description}
-                onChange={e => setDescription(e.target.value)} />
-            </div>
-            <button style={s.saveBtn} type="submit" disabled={savingProfile}>
-              {profileSaved ? '✅ Guardado' : savingProfile ? 'Guardando...' : 'Guardar perfil'}
-            </button>
-          </form>
-        </div>
 
       </div>
     </div>
@@ -817,43 +901,45 @@ export default function VendorDashboard() {
 const s = {
   page:       { background:'var(--bg)', minHeight:'calc(100vh - 60px)', padding:'1.5rem 1rem' },
   container:  { maxWidth:'720px', margin:'0 auto', display:'flex', flexDirection:'column', gap:'1.2rem' },
-  loading:    { padding:'3rem', textAlign:'center', color:'#888' },
-  header:     { display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:'1rem' },
-  headerLeft: { display:'flex', flexDirection:'column', gap:'0.4rem' },
-  backBtn:    { color:'var(--green)', textDecoration:'none', fontSize:'0.85rem', fontWeight:600 },
-  title:      { fontSize:'1.4rem', fontWeight:800, color:'var(--text)', margin:0 },
-  subtitle:   { fontSize:'0.85rem', color:'var(--text-2)', margin:0 },
-  alertBadge: { background:'#fef3c7', color:'#92400e', border:'1px solid #fde68a', padding:'0.4rem 0.8rem', borderRadius:'20px', fontWeight:700, fontSize:'0.82rem' },
-  headerRight:    { display:'flex', flexDirection:'column', alignItems:'flex-end', gap:'0.4rem' },
-  avatarWrap:     { position:'relative', width:'64px', height:'64px', borderRadius:'50%', cursor:'pointer', flexShrink:0, boxShadow:'0 3px 12px rgba(0,0,0,0.15)' },
-  avatarImg:      { width:'64px', height:'64px', borderRadius:'50%', objectFit:'cover', border:'3px solid #fff' },
-  avatarPlaceholder:{ width:'64px', height:'64px', borderRadius:'50%', background:'linear-gradient(135deg,var(--green),var(--green-mid))', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.6rem', fontWeight:800, border:'3px solid #fff' },
-  avatarUpload:   { width:'64px', height:'64px', borderRadius:'50%', background:'#f3f4f6', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.4rem' },
-  avatarOverlay:  { position:'absolute', inset:0, borderRadius:'50%', background:'rgba(0,0,0,0.35)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.2rem', opacity:0, transition:'opacity 0.2s', ':hover':{ opacity:1 } },
-  spinner:        { animation:'spin 1s linear infinite', display:'inline-block' },
-  notifOn:    { fontSize:'0.75rem', color:'#16a34a', fontWeight:600 },
-  notifOff:   { fontSize:'0.75rem', color:'#dc2626', fontWeight:600, cursor:'help' },
-  notifBtn:   { background:'#f0f7f0', color:'var(--green)', border:'1.5px solid var(--green-border)', padding:'0.35rem 0.8rem', borderRadius:'20px', fontSize:'0.78rem', fontWeight:600, cursor:'pointer', fontFamily:'inherit' },
-  section:    { background:'#fff', borderRadius:'var(--radius-lg)', padding:'1.3rem', boxShadow:'var(--shadow-sm)', border:'2px solid transparent' },
+  loading:    { padding:'3rem', textAlign:'center', color:'var(--text-3)' },
+
+  /* Hero */
+  heroCard:   { background:'linear-gradient(135deg,#1a5c1a 0%,#2d7a2d 60%,#3d9e3d 100%)', borderRadius:'var(--radius-lg)', padding:'1.4rem 1.5rem', boxShadow:'0 8px 32px rgba(45,122,45,0.3)', display:'flex', flexDirection:'column', gap:'1rem' },
+  heroBody:   { display:'flex', alignItems:'center', gap:'1rem' },
+  heroInfo:   { flex:1, minWidth:0 },
+  heroName:   { fontSize:'1.35rem', fontWeight:800, color:'#fff', margin:'0 0 0.2rem', lineHeight:1.2 },
+  heroSub:    { fontSize:'0.85rem', color:'rgba(255,255,255,0.75)', margin:'0 0 0.5rem', display:'flex', alignItems:'center', gap:'0.4rem' },
+  heroDot:    { width:8, height:8, borderRadius:'50%', flexShrink:0 },
+  heroBadges: { display:'flex', flexWrap:'wrap', gap:'0.4rem', alignItems:'center' },
+  heroPendingBadge: { background:'#fef3c7', color:'#92400e', fontSize:'0.75rem', fontWeight:700, padding:'0.25rem 0.65rem', borderRadius:'20px' },
+  heroNotifOn:  { fontSize:'0.75rem', color:'#86efac', fontWeight:600 },
+  heroNotifOff: { fontSize:'0.75rem', color:'#fca5a5', fontWeight:600 },
+  heroNotifBtn: { background:'rgba(255,255,255,0.15)', color:'#fff', border:'1px solid rgba(255,255,255,0.35)', padding:'0.28rem 0.7rem', borderRadius:'20px', fontSize:'0.75rem', fontWeight:600, cursor:'pointer', fontFamily:'inherit' },
+  avatarWrap:   { position:'relative', width:72, height:72, borderRadius:'50%', cursor:'pointer', flexShrink:0, boxShadow:'0 4px 16px rgba(0,0,0,0.25)' },
+  avatarImg:    { width:72, height:72, borderRadius:'50%', objectFit:'cover', border:'3px solid rgba(255,255,255,0.8)' },
+  avatarPlaceholder: { width:72, height:72, borderRadius:'50%', background:'rgba(255,255,255,0.2)', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.8rem', fontWeight:800, border:'3px solid rgba(255,255,255,0.5)' },
+  avatarOverlay: { position:'absolute', inset:0, borderRadius:'50%', background:'rgba(0,0,0,0.4)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'1.2rem', opacity:0, transition:'opacity 0.2s' },
+  spinner:       { animation:'spin 1s linear infinite', display:'inline-block' },
+  section:    { background:'var(--card)', borderRadius:'var(--radius-lg)', padding:'1.3rem', boxShadow:'var(--shadow-sm)', border:'2px solid transparent' },
   sectionHead:{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'0.8rem' },
   sectionTitle:{ fontSize:'1rem', fontWeight:700, color:'var(--text)', margin:0 },
   empty:      { color:'var(--text-3)', fontSize:'0.85rem', textAlign:'center', padding:'0.6rem 0' },
 
   /* Pedidos colapsables */
   orderSection:     { border:'1px solid var(--border)', borderRadius:'var(--radius)' },
-  orderSectionHead: { width:'100%', display:'flex', justifyContent:'space-between', alignItems:'center', padding:'0.75rem 1rem', background:'var(--bg)', border:'none', cursor:'pointer', fontFamily:'inherit', borderLeft:'4px solid #ccc', touchAction:'manipulation', WebkitTapHighlightColor:'transparent' },
+  orderSectionHead: { width:'100%', display:'flex', justifyContent:'space-between', alignItems:'center', padding:'0.75rem 1rem', background:'var(--card)', border:'none', cursor:'pointer', fontFamily:'inherit', borderLeft:'4px solid #ccc', touchAction:'manipulation', WebkitTapHighlightColor:'transparent' },
   groupDot:    { width:'10px', height:'10px', borderRadius:'50%', flexShrink:0 },
   groupLabel:  { fontWeight:600, fontSize:'0.9rem', color:'var(--text)' },
   groupCount:  { color:'#fff', fontSize:'0.72rem', fontWeight:700, padding:'0.1rem 0.45rem', borderRadius:'20px' },
   chevron:     { fontSize:'0.7rem', color:'var(--text-3)' },
-  orderList:   { padding:'0.7rem', display:'flex', flexDirection:'column', gap:'0.6rem', background:'#fff', borderRadius:'0 0 var(--radius) var(--radius)' },
+  orderList:   { padding:'0.7rem', display:'flex', flexDirection:'column', gap:'0.6rem', background:'var(--card)', borderRadius:'0 0 var(--radius) var(--radius)' },
   orderCard:   { background:'var(--bg)', borderRadius:'var(--radius-sm)', padding:'0.8rem', border:'1px solid var(--border)' },
   orderHead:   { display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'0.4rem', flexWrap:'wrap', gap:'0.3rem' },
   typePill:    { fontSize:'0.78rem', fontWeight:600, padding:'0.18rem 0.55rem', borderRadius:'20px' },
-  locPill:     { fontSize:'0.75rem', color:'#888', background:'#f3f4f6', padding:'0.1rem 0.4rem', borderRadius:'20px' },
+  locPill:     { fontSize:'0.75rem', color:'var(--text-3)', background:'var(--bg)', padding:'0.1rem 0.4rem', borderRadius:'20px' },
   statusPill:  { color:'#fff', fontSize:'0.72rem', fontWeight:700, padding:'0.18rem 0.55rem', borderRadius:'20px' },
   orderProducts:{ display:'flex', flexWrap:'wrap', gap:'0.25rem', margin:'0.35rem 0' },
-  orderProduct: { background:'#fff', border:'1px solid var(--border)', fontSize:'0.78rem', padding:'0.15rem 0.45rem', borderRadius:'20px' },
+  orderProduct: { background:'var(--card)', border:'1px solid var(--border)', fontSize:'0.78rem', padding:'0.15rem 0.45rem', borderRadius:'20px' },
   orderMeta:   { fontSize:'0.78rem', color:'var(--text-2)', margin:'0.2rem 0 0' },
   orderActions:{ display:'flex', gap:'0.5rem', marginTop:'0.5rem' },
   btnAccept:   { flex:1, background:'var(--green)', color:'#fff', border:'none', padding:'0.5rem 0.7rem', borderRadius:'var(--radius-sm)', cursor:'pointer', fontWeight:600, fontSize:'0.83rem', fontFamily:'inherit' },
@@ -883,11 +969,11 @@ const s = {
   onlineDot:  { width:'7px', height:'7px', borderRadius:'50%', background:'#22c55e' },
 
   /* Live tracking */
-  liveBox:      { background:'#fff7f7', border:'1px solid #fecaca', borderRadius:'var(--radius)', padding:'0.85rem', marginBottom:'0.9rem' },
+  liveBox:      { background:'var(--bg)', border:'1px solid #fecaca', borderRadius:'var(--radius)', padding:'0.85rem', marginBottom:'0.9rem' },
   liveBoxRow:   { display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'0.6rem' },
-  liveTitleTxt: { fontWeight:600, fontSize:'0.88rem', color:'#111827', display:'block' },
-  liveHint:     { display:'block', fontSize:'0.76rem', color:'#9ca3af', marginTop:'0.2rem' },
-  liveCoords:   { display:'block', fontSize:'0.73rem', color:'#6b7280', marginTop:'0.2rem', fontFamily:'monospace' },
+  liveTitleTxt: { fontWeight:600, fontSize:'0.88rem', color:'var(--text)', display:'block' },
+  liveHint:     { display:'block', fontSize:'0.76rem', color:'var(--text-3)', marginTop:'0.2rem' },
+  liveCoords:   { display:'block', fontSize:'0.73rem', color:'var(--text-2)', marginTop:'0.2rem', fontFamily:'monospace' },
   liveStartBtn: { background:'#ef4444', color:'#fff', border:'none', borderRadius:'var(--radius-sm)', padding:'0.42rem 0.85rem', fontWeight:600, cursor:'pointer', fontSize:'0.83rem', whiteSpace:'nowrap', flexShrink:0 },
   liveStopBtn:  { background:'#fee2e2', color:'#b91c1c', border:'1px solid #fecaca', borderRadius:'var(--radius-sm)', padding:'0.42rem 0.85rem', fontWeight:600, cursor:'pointer', fontSize:'0.83rem', whiteSpace:'nowrap', flexShrink:0 },
   liveBanner:   { display:'flex', alignItems:'center', gap:'0.45rem', fontSize:'0.78rem', color:'#b91c1c', marginTop:'0.6rem', fontWeight:500 },
@@ -919,11 +1005,25 @@ const s = {
   saveBtn:    { padding:'0.6rem 1.2rem', background:'var(--green)', color:'#fff', border:'none', borderRadius:'var(--radius-sm)', cursor:'pointer', fontWeight:600, fontFamily:'inherit', whiteSpace:'nowrap' },
   cancelBtn:  { padding:'0.6rem 0.8rem', background:'var(--border)', color:'var(--text)', border:'none', borderRadius:'var(--radius-sm)', cursor:'pointer', fontFamily:'inherit' },
 
+  /* Zonas frecuentes */
+  zoneForm:       { display:'flex', gap:'0.4rem', flexWrap:'wrap', alignItems:'center' },
+  zoneGpsBtn:     { padding:'0.5rem 0.8rem', background:'var(--green)', color:'#fff', border:'none', borderRadius:'var(--radius-sm)', cursor:'pointer', fontWeight:600, fontSize:'0.82rem', fontFamily:'inherit', whiteSpace:'nowrap', flexShrink:0 },
+  zoneMapBtn:     { padding:'0.5rem 0.8rem', background:'#eff6ff', color:'#1d4ed8', border:'1px solid #93c5fd', borderRadius:'var(--radius-sm)', cursor:'pointer', fontWeight:600, fontSize:'0.82rem', fontFamily:'inherit', whiteSpace:'nowrap', flexShrink:0 },
+  zoneCard:       { display:'flex', alignItems:'center', justifyContent:'space-between', gap:'0.5rem', background:'var(--bg)', border:'1.5px solid var(--border)', borderRadius:'var(--radius)', padding:'0.65rem 0.75rem', flexWrap:'wrap' },
+  zoneCardLeft:   { display:'flex', flexDirection:'column', gap:'0.15rem', flex:1, minWidth:0 },
+  zoneCardRight:  { display:'flex', alignItems:'center', gap:'0.35rem', flexShrink:0, flexWrap:'wrap' },
+  zoneName:       { fontWeight:600, fontSize:'0.88rem', color:'var(--text)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' },
+  zoneCoords:     { fontSize:'0.7rem', color:'var(--text-3)', fontFamily:'monospace' },
+  zoneApplyBtn:   { fontSize:'0.78rem', padding:'0.28rem 0.65rem', background:'var(--green-light)', color:'var(--green)', border:'1.5px solid var(--green-border)', borderRadius:'20px', cursor:'pointer', fontFamily:'inherit', fontWeight:600, whiteSpace:'nowrap' },
+  zoneApplyPicker:{ display:'flex', alignItems:'center', gap:'0.3rem', flexWrap:'wrap' },
+  zoneLocBtn:     { fontSize:'0.75rem', padding:'0.22rem 0.55rem', background:'var(--green)', color:'#fff', border:'none', borderRadius:'20px', cursor:'pointer', fontFamily:'inherit', fontWeight:600, whiteSpace:'nowrap' },
+  zoneCancelBtn:  { fontSize:'0.78rem', padding:'0.22rem 0.4rem', background:'none', border:'none', cursor:'pointer', color:'var(--text-3)', fontFamily:'inherit' },
+
   /* Estadísticas */
-  statsGrid:      { display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(130px, 1fr))', gap:'0.65rem', marginBottom:'0.8rem' },
-  statCard:       { background:'var(--bg)', borderRadius:'var(--radius)', padding:'0.9rem 0.6rem', border:'1px solid var(--border)', display:'flex', flexDirection:'column', alignItems:'center', gap:'0.25rem', textAlign:'center' },
-  statIcon:       { fontSize:'1.3rem', lineHeight:1 },
-  statVal:        { fontSize:'1.3rem', fontWeight:800, color:'var(--text)', lineHeight:1 },
-  statLabel:      { fontSize:'0.72rem', color:'var(--text-3)', fontWeight:500 },
-  totalRevBanner: { background:'#f0fdf4', border:'1px solid #bbf7d0', borderRadius:'var(--radius-sm)', padding:'0.65rem 0.9rem', fontSize:'0.88rem', color:'var(--text-2)', display:'flex', alignItems:'center', gap:'0.5rem', flexWrap:'wrap' },
+  statsGrid:    { display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'0.6rem' },
+  statCard:     { background:'var(--bg)', borderRadius:'var(--radius)', padding:'0.85rem 0.5rem', border:'1px solid var(--border)', borderTop:'3px solid #ccc', display:'flex', flexDirection:'column', alignItems:'center', gap:'0.2rem', textAlign:'center' },
+  statIcon:     { fontSize:'1.2rem', lineHeight:1 },
+  statVal:      { fontSize:'1.3rem', fontWeight:800, lineHeight:1 },
+  statLabel:    { fontSize:'0.67rem', color:'var(--text-3)', fontWeight:500 },
+  totalRevPill: { fontSize:'0.8rem', color:'var(--green)', fontWeight:600, background:'var(--green-light)', border:'1px solid var(--green-border)', padding:'0.2rem 0.7rem', borderRadius:'20px' },
 };

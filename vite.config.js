@@ -6,6 +6,9 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.js',
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'icon.svg'],
       manifest: {
@@ -32,23 +35,8 @@ export default defineConfig({
           },
         ],
       },
-      workbox: {
+      injectManifest: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/.*\.basemaps\.cartocdn\.com\/.*/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'map-tiles',
-              expiration: { maxEntries: 200, maxAgeSeconds: 7 * 24 * 60 * 60 },
-            },
-          },
-          {
-            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-            handler: 'StaleWhileRevalidate',
-            options: { cacheName: 'google-fonts' },
-          },
-        ],
       },
     }),
   ],
