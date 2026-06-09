@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { collection, getDocs, updateDoc, doc } from 'firebase/firestore';
+import { collection, getDocs, updateDoc, addDoc, doc, serverTimestamp, increment } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
@@ -24,10 +24,11 @@ export default function AdminPanel() {
   const navigate = useNavigate();
   const toast    = useToast();
 
-  const [tab,     setTab]     = useState('metrics');
-  const [vendors, setVendors] = useState([]);
-  const [orders,  setOrders]  = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [tab,      setTab]     = useState('metrics');
+  const [vendors,  setVendors] = useState([]);
+  const [orders,   setOrders]  = useState([]);
+  const [loading,  setLoading] = useState(true);
+  const [payingId, setPayingId]= useState(null);
 
   useEffect(() => {
     if (!currentUser) { navigate('/login'); return; }
@@ -55,6 +56,26 @@ export default function AdminPanel() {
     });
   }, [currentUser, userRole]);
 
+  async function markPaid(vendor) {
+    const pending = (vendor.balance || 0) - (vendor.paidOut || 0);
+    if (pending <= 0 || payingId) return;
+    if (!window.confirm(`¿Registrar pago de $${pending.toLocaleString()} a ${vendor.name}?\n\nAsegúrate de haber realizado la transferencia antes de confirmar.`)) return;
+    setPayingId(vendor.id);
+    await Promise.all([
+      updateDoc(doc(db, 'vendors', vendor.id), { paidOut: increment(pending) }),
+      addDoc(collection(db, 'payouts'), {
+        vendorId:   vendor.id,
+        vendorName: vendor.name,
+        amount:     pending,
+        paidAt:     serverTimestamp(),
+        adminId:    currentUser.uid,
+      }),
+    ]);
+    setVendors(prev => prev.map(v => v.id === vendor.id ? { ...v, paidOut: (v.paidOut||0) + pending } : v));
+    setPayingId(null);
+    toast.success(`Pago de $${pending.toLocaleString()} registrado para ${vendor.name}`);
+  }
+
   async function toggleOnline(vendorId, current) {
     await updateDoc(doc(db, 'vendors', vendorId), { isOnline: !current });
     setVendors(prev => prev.map(v => v.id === vendorId ? { ...v, isOnline: !current } : v));
@@ -77,10 +98,13 @@ export default function AdminPanel() {
   if (userRole && userRole !== 'admin') return <div style={s.loading}>⛔ Sin acceso. Esta página es solo para administradores.</div>;
   if (loading) return <div style={s.loading}>⏳ Cargando datos del sistema...</div>;
 
+  const vendorsWithPending = vendors.filter(v => (v.balance||0) - (v.paidOut||0) > 0);
+
   const TABS = [
-    { key:'metrics', label:'📊 Métricas'                     },
-    { key:'vendors', label:`🏪 Vendedores (${vendors.length})` },
-    { key:'orders',  label:`📦 Pedidos (${orders.length})`    },
+    { key:'metrics', label:'📊 Métricas'                              },
+    { key:'vendors', label:`🏪 Vendedores (${vendors.length})`         },
+    { key:'orders',  label:`📦 Pedidos (${orders.length})`            },
+    { key:'payouts', label:`💰 Pagos${vendorsWithPending.length > 0 ? ` (${vendorsWithPending.length})` : ''}` },
   ];
 
   return (
@@ -192,6 +216,68 @@ export default function AdminPanel() {
                   </div>
                 );
               })}
+            </div>
+          </div>
+        )}
+
+        {/* ── PAGOS ── */}
+        {tab === 'payouts' && (
+          <div style={s.section}>
+            <p style={s.hint}>
+              Aquí ves lo que debes pagarle a cada vendedor. Cuando hagas la transferencia, marca el pago como registrado.
+            </p>
+            {vendors.length === 0 && <p style={s.empty}>No hay vendedores aún.</p>}
+            <div style={s.vendorList}>
+              {[...vendors]
+                .map(v => ({ ...v, pending: (v.balance||0) - (v.paidOut||0) }))
+                .sort((a,b) => b.pending - a.pending)
+                .map(v => (
+                  <div key={v.id} style={{ ...s.vendorCard, flexWrap:'wrap', gap:'0.6rem' }}>
+                    <div style={s.vendorLeft}>
+                      {v.photoURL
+                        ? <img src={v.photoURL} alt={v.name} style={s.vendorAvatar} />
+                        : <div style={s.vendorAvatarFallback}>{v.name?.[0]?.toUpperCase()}</div>
+                      }
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={s.vendorName}>{v.name}</div>
+                        <div style={{ display:'flex', gap:'0.5rem', flexWrap:'wrap', marginTop:'0.2rem', fontSize:'0.75rem', color:'var(--text-3)' }}>
+                          <span>Total ganado: <strong style={{ color:'var(--text)' }}>${(v.balance||0).toLocaleString()}</strong></span>
+                          <span>·</span>
+                          <span>Ya pagado: <strong style={{ color:'var(--text)' }}>${(v.paidOut||0).toLocaleString()}</strong></span>
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ display:'flex', alignItems:'center', gap:'0.7rem', marginLeft:'auto' }}>
+                      <div style={{ textAlign:'right' }}>
+                        <div style={{ fontWeight:800, fontSize:'1rem', color: v.pending>0 ? '#dc2626' : 'var(--text-3)' }}>
+                          ${v.pending.toLocaleString()}
+                        </div>
+                        <div style={{ fontSize:'0.7rem', color:'var(--text-3)' }}>por pagar</div>
+                      </div>
+                      {v.pending > 0 && (
+                        <button
+                          style={{ ...s.toggleBtn, ...s.toggleOn, background:'#dcfce7', color:'#166534', borderColor:'#86efac', opacity: payingId===v.id ? 0.6 : 1 }}
+                          disabled={payingId === v.id}
+                          onClick={() => markPaid(v)}
+                        >
+                          {payingId === v.id ? '⏳' : '✓ Marcar pagado'}
+                        </button>
+                      )}
+                      {v.pending <= 0 && v.balance > 0 && (
+                        <span style={{ fontSize:'0.8rem', color:'#16a34a', fontWeight:600 }}>✅ Al día</span>
+                      )}
+                    </div>
+                  </div>
+                ))
+              }
+            </div>
+            <div style={{ marginTop:'1rem', padding:'0.8rem', background:'var(--bg)', borderRadius:'var(--radius)', border:'1px solid var(--border)' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', fontSize:'0.88rem', fontWeight:700, color:'var(--text)' }}>
+                <span>Total pendiente por pagar</span>
+                <span style={{ color:'#dc2626' }}>
+                  ${vendors.reduce((s,v) => s + Math.max(0,(v.balance||0)-(v.paidOut||0)), 0).toLocaleString()}
+                </span>
+              </div>
             </div>
           </div>
         )}

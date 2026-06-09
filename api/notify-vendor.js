@@ -1,6 +1,9 @@
 import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
+import { setCors } from './_cors.js';
+
+const PRODUCTS_NOTIFY_MAX = 3;
 
 function getAdminApp() {
   if (getApps().length) return getApps()[0];
@@ -11,9 +14,7 @@ function getAdminApp() {
 }
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  setCors(req, res);
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).end();
 
@@ -31,7 +32,7 @@ export default async function handler(req, res) {
 
     const typeLabel = type === 'domicilio' ? '🛵 Domicilio' : '🛒 Retiro en puesto';
     const prodList  = (products || [])
-      .slice(0, 3)
+      .slice(0, PRODUCTS_NOTIFY_MAX)
       .map(p => `${p.emoji || ''} ${p.name} ×${p.qty}`.trim())
       .join(', ');
 

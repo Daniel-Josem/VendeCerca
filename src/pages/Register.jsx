@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import usePageMeta from '../hooks/usePageMeta';
+import { VERIFICATION_CODE_EXPIRY_MS } from '../config/constants';
 import { createUserWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { doc, setDoc, getDoc, collection, addDoc, query, where, getDocs, deleteDoc, serverTimestamp, Timestamp } from 'firebase/firestore';
 import emailjs from '@emailjs/browser';
@@ -37,7 +38,7 @@ export default function Register() {
       await Promise.all(snap.docs.map(d => deleteDoc(d.ref)));
 
       const newCode   = generateCode();
-      const expiresAt = Timestamp.fromDate(new Date(Date.now() + 10 * 60 * 1000));
+      const expiresAt = Timestamp.fromDate(new Date(Date.now() + VERIFICATION_CODE_EXPIRY_MS));
 
       await addDoc(collection(db, 'verificationCodes'), {
         email: form.email,

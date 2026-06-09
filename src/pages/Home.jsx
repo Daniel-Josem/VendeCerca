@@ -3,6 +3,7 @@ import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { MapContainer, TileLayer, Marker, Popup, useMap, Circle } from 'react-leaflet';
 import L from 'leaflet';
+import { LIVE_LOCATION_FRESHNESS_MS, MAP_DEFAULT_ZOOM, MAP_FLY_ZOOM, PRODUCTS_PREVIEW_COUNT } from '../config/constants';
 import 'leaflet/dist/leaflet.css';
 import { Link } from 'react-router-dom';
 import OrderModal from '../components/OrderModal';
@@ -42,7 +43,7 @@ function makeVendorLiveIcon(emoji = '🏪') {
 
 // liveLocation fresca = actualizada hace menos de 5 min
 function isLiveFresh(v) {
-  return !!(v.liveLocation?.lat && v.liveLocation?.updatedAt && Date.now() - v.liveLocation.updatedAt < 300_000);
+  return !!(v.liveLocation?.lat && v.liveLocation?.updatedAt && Date.now() - v.liveLocation.updatedAt < LIVE_LOCATION_FRESHNESS_MS);
 }
 
 function haversineDistance(lat1, lng1, lat2, lng2) {
@@ -85,7 +86,7 @@ function AutoCenter({ userPos, active }) {
   const done = useRef(false);
   useEffect(() => {
     if (userPos && !done.current && active) {
-      map.flyTo([userPos.lat, userPos.lng], 15, { duration: 1.5 });
+      map.flyTo([userPos.lat, userPos.lng], MAP_FLY_ZOOM, { duration: 1.5 });
       done.current = true;
     }
   }, [userPos, active, map]);
@@ -547,13 +548,13 @@ export default function Home() {
           </div>
         )}
         {mapMounted && <MapContainer
-          center={mapCenter} zoom={14}
+          center={mapCenter} zoom={MAP_DEFAULT_ZOOM}
           style={{ height: '100%', width: '100%' }}
           whenReady={() => setMapReady(true)}
         >
           <TileLayer
-            url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-            attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/attributions">CARTO</a>'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           />
           <MapController mapRef={mapRef} />
           <InvalidateSize active={!isMobile || activeView === 'map'} />
@@ -594,7 +595,7 @@ export default function Home() {
                         {v.rating > 0 && <span style={s.popupRating}>⭐ {v.rating.toFixed(1)}</span>}
                       </div>
                       <div style={s.popupProducts}>
-                        {v.products?.slice(0, 3).map(p => (
+                        {v.products?.slice(0, PRODUCTS_PREVIEW_COUNT).map(p => (
                           <div key={p.id} style={s.popupProduct}>
                             <span>{p.emoji} {p.name}</span>
                             <strong style={{ color: 'var(--green)' }}>${p.price}/{p.unit}</strong>
@@ -633,7 +634,7 @@ export default function Home() {
                       {v.rating > 0 && <span style={s.popupRating}>⭐ {v.rating.toFixed(1)}</span>}
                     </div>
                     <div style={s.popupProducts}>
-                      {v.products?.slice(0, 3).map(p => (
+                      {v.products?.slice(0, PRODUCTS_PREVIEW_COUNT).map(p => (
                         <div key={p.id} style={s.popupProduct}>
                           <span>{p.emoji} {p.name}</span>
                           <strong style={{ color: 'var(--green)' }}>${p.price}/{p.unit}</strong>

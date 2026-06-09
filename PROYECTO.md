@@ -117,6 +117,12 @@ public/
 14. **Chat en tiempo real** — ChatDrawer en pedidos activos para vendedor y comprador (subcolección Firestore orders/{id}/messages)
 15. **Notificaciones push** — FCM via Vercel API route (`api/notify-vendor.js`). El vendedor recibe push aunque tenga la app cerrada cuando llega un pedido. VAPID key en `.env` como `VITE_FIREBASE_VAPID_KEY`.
 16. **Zonas frecuentes** — El vendedor guarda sus spots habituales (GPS o posición del mapa) y los aplica a cualquier sede con un clic. Guardado en `vendors/{uid}.savedZones`.
+17. **Modo oscuro** — Toggle 🌙/☀️ en Navbar. ThemeContext guarda preferencia en localStorage.
+18. **Mapa de actividad** — Historial en `vendors/{uid}.locationHistory[]`. Se registra al activar sede. Círculos proporcionales a frecuencia en Dashboard.
+19. **Cupones de descuento** — `vendors/{uid}.coupons[]`. Vendedor crea cupones con % o valor fijo. Comprador aplica en OrderModal. Se guarda `couponCode`, `discountAmount`, `total` en la orden.
+20. **Métodos de pago** — Efectivo, Nequi/Daviplata, Tarjeta (Wompi). Vendedor configura número Nequi y clave Wompi en Dashboard. Para tarjeta abre Wompi checkout.
+21. **Compartir con QR** — ShareModal con QR (qrcode.react) + copiar enlace + Web Share API. Sección "📲 Mi enlace" en Dashboard. Botón "📤" en VendorProfile.
+22. **Galería multi-imagen** — Hasta 3 fotos por producto (`product.images[]`). GalleryModal con carrusel + thumbnails + teclado. Disponible en VendorProfile y OrderModal.
 17. **Modo oscuro** — Toggle 🌙/☀️ en Navbar. ThemeContext guarda preferencia en localStorage, aplica `data-theme` al `<html>`. Variables CSS en `index.css`.
 
 ---

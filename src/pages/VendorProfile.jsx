@@ -3,6 +3,9 @@ import { useParams } from 'react-router-dom';
 import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import usePageMeta from '../hooks/usePageMeta';
+import ShareModal from '../components/ShareModal';
+import GalleryModal from '../components/GalleryModal';
+import OrderModal from '../components/OrderModal';
 
 function formatDate(ts) {
   if (!ts) return '';
@@ -12,8 +15,11 @@ function formatDate(ts) {
 
 export default function VendorProfile() {
   const { id }  = useParams();
-  const [vendor,  setVendor]  = useState(null);
-  const [reviews, setReviews] = useState([]);
+  const [vendor,       setVendor]       = useState(null);
+  const [reviews,      setReviews]      = useState([]);
+  const [showShare,    setShowShare]    = useState(false);
+  const [gallery,      setGallery]      = useState(null); // {images, name}
+  const [orderType,    setOrderType]    = useState(null); // 'domicilio' | 'recoger'
 
   useEffect(() => {
     getDoc(doc(db, 'vendors', id)).then(snap => {
@@ -46,6 +52,7 @@ export default function VendorProfile() {
     : vendor.rating || 0;
 
   return (
+  <>
     <div style={s.container}>
       <div style={s.card} className="anim-scale-in">
 
@@ -55,12 +62,15 @@ export default function VendorProfile() {
             ? <img src={vendor.photoURL} alt={vendor.name} style={s.avatarImg} />
             : <div style={s.avatar}>{vendor.name?.[0]?.toUpperCase()}</div>
           }
-          <div>
+          <div style={{ flex:1, minWidth:0 }}>
             <h2 style={s.name}>{vendor.name}</h2>
             <span style={s.badge(vendor.isOnline)}>
               {vendor.isOnline ? '🟢 En línea' : '⚫ Offline'}
             </span>
           </div>
+          <button style={s.shareBtn} onClick={() => setShowShare(true)} title="Compartir perfil">
+            📤
+          </button>
         </div>
 
         {vendor.description && <p style={s.description}>{vendor.description}</p>}
@@ -105,27 +115,56 @@ export default function VendorProfile() {
           {allProducts.length === 0 && (
             <p style={{ color:'var(--text-3)', fontSize:'0.9rem' }}>Sin productos registrados</p>
           )}
-          {allProducts.map((p,i) => (
-            <div key={i} style={s.product}>
-              {p.imageURL
-                ? <img src={p.imageURL} alt={p.name} style={s.productImg} />
-                : <span style={s.productEmoji}>{p.emoji}</span>
-              }
-              <div style={{ flex:1 }}>
-                <strong style={{ fontSize:'0.95rem' }}>{p.name}</strong>
-                <div style={s.productMeta}>
-                  ${p.price}/{p.unit}
-                  {p.stock && parseInt(p.stock) > 0 && (
-                    <span style={{ marginLeft:'0.5rem', color: parseInt(p.stock)<=3?'#dc2626':'#2d7a2d', fontWeight:600 }}>
-                      · {p.stock} disponibles
+          {allProducts.map((p,i) => {
+            const imgs = p.images?.filter(Boolean).length ? p.images.filter(Boolean) : (p.imageURL ? [p.imageURL] : []);
+            const hasGallery = imgs.length > 1;
+            return (
+              <div key={i} style={s.product}>
+                <div style={{ position:'relative', flexShrink:0 }}>
+                  {imgs.length > 0 ? (
+                    <img src={imgs[0]} alt={p.name} style={{ ...s.productImg, cursor: hasGallery ? 'pointer' : 'default' }}
+                      onClick={() => hasGallery && setGallery({ images:imgs, name:p.name })} />
+                  ) : (
+                    <span style={s.productEmoji}>{p.emoji}</span>
+                  )}
+                  {hasGallery && (
+                    <span style={s.galBadge} onClick={() => setGallery({ images:imgs, name:p.name })}>
+                      {imgs.length}📷
                     </span>
                   )}
-                  {p.stock === '0' && <span style={{ marginLeft:'0.5rem', color:'#dc2626', fontWeight:600 }}>· Agotado</span>}
+                </div>
+                <div style={{ flex:1 }}>
+                  <strong style={{ fontSize:'0.95rem' }}>{p.name}</strong>
+                  <div style={s.productMeta}>
+                    ${p.price}/{p.unit}
+                    {p.stock && parseInt(p.stock) > 0 && (
+                      <span style={{ marginLeft:'0.5rem', color: parseInt(p.stock)<=3?'#dc2626':'#2d7a2d', fontWeight:600 }}>
+                        · {p.stock} disponibles
+                      </span>
+                    )}
+                    {p.stock === '0' && <span style={{ marginLeft:'0.5rem', color:'#dc2626', fontWeight:600 }}>· Agotado</span>}
+                    {hasGallery && <span style={{ marginLeft:'0.5rem', color:'var(--text-3)', fontSize:'0.72rem' }}>· ver fotos</span>}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
+
+        {/* Botones de pedido */}
+        {vendor.isOnline && allProducts.length > 0 && (
+          <div style={s.orderSection}>
+            <p style={s.orderTitle}>¿Listo para pedir?</p>
+            <div style={s.orderBtns}>
+              <button style={s.btnDomicilio} onClick={() => setOrderType('domicilio')}>
+                🛵 A domicilio
+              </button>
+              <button style={s.btnRecoger} onClick={() => setOrderType('recoger')}>
+                🛒 Ir a comprar
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Reseñas */}
         <div style={s.reviewsSection}>
@@ -160,6 +199,17 @@ export default function VendorProfile() {
 
       </div>
     </div>
+
+    {showShare && vendor && (
+      <ShareModal vendorId={id} vendorName={vendor.name} onClose={() => setShowShare(false)} />
+    )}
+    {gallery && (
+      <GalleryModal images={gallery.images} productName={gallery.name} onClose={() => setGallery(null)} />
+    )}
+    {orderType && vendor && (
+      <OrderModal vendor={vendor} type={orderType} locationId={null} onClose={() => setOrderType(null)} />
+    )}
+  </>
   );
 }
 
@@ -191,6 +241,11 @@ const s = {
   productImg:   { width:'48px', height:'48px', borderRadius:'10px', objectFit:'cover', flexShrink:0 },
   productMeta:  { fontSize:'0.8rem', color:'var(--text-2)', marginTop:'0.15rem' },
 
+  orderSection:  { background:'var(--green-light)', border:'1px solid var(--green-border)', borderRadius:'14px', padding:'1rem 1.1rem', marginBottom:'1.5rem' },
+  orderTitle:    { fontWeight:700, color:'var(--green)', fontSize:'0.9rem', margin:'0 0 0.7rem' },
+  orderBtns:     { display:'flex', gap:'0.6rem' },
+  btnDomicilio:  { flex:1, background:'#f59e0b', color:'#fff', border:'none', borderRadius:'10px', padding:'0.7rem 0.5rem', fontWeight:700, fontSize:'0.9rem', cursor:'pointer', fontFamily:'inherit' },
+  btnRecoger:    { flex:1, background:'var(--green)', color:'#fff', border:'none', borderRadius:'10px', padding:'0.7rem 0.5rem', fontWeight:700, fontSize:'0.9rem', cursor:'pointer', fontFamily:'inherit' },
   reviewsSection:{ borderTop:'1px solid var(--border)', paddingTop:'1.2rem' },
   reviewsTitle:  { fontWeight:700, color:'var(--text)', marginBottom:'0.9rem', display:'flex', alignItems:'center', gap:'0.5rem' },
   noReviews:     { color:'var(--text-3)', fontSize:'0.88rem' },
@@ -202,4 +257,6 @@ const s = {
   reviewDate:    { fontSize:'0.72rem', color:'var(--text-3)' },
   reviewStars:   { display:'flex', gap:'0.05rem', marginLeft:'auto' },
   reviewComment: { fontSize:'0.85rem', color:'var(--text-2)', margin:'0.2rem 0 0', lineHeight:1.5, fontStyle:'italic' },
+  shareBtn:      { background:'var(--bg)', border:'1px solid var(--border)', borderRadius:'10px', padding:'0.5rem 0.7rem', cursor:'pointer', fontSize:'1rem', flexShrink:0 },
+  galBadge:      { position:'absolute', bottom:'-2px', right:'-2px', background:'rgba(0,0,0,0.65)', color:'#fff', fontSize:'0.58rem', fontWeight:700, borderRadius:'20px', padding:'1px 4px', cursor:'pointer' },
 };

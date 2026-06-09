@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { collection, addDoc, query, where, getDocs, deleteDoc, Timestamp } from 'firebase/firestore';
+import { VERIFICATION_CODE_EXPIRY_MS, RESET_TOKEN_EXPIRY_MS } from '../config/constants';
 import emailjs from '@emailjs/browser';
 import { db } from '../firebase/config';
 import { Link } from 'react-router-dom';
@@ -32,7 +33,7 @@ export default function ForgotPassword() {
       await Promise.all(snap.docs.map(d => deleteDoc(d.ref)));
 
       const newCode   = generateCode();
-      const expiresAt = Timestamp.fromDate(new Date(Date.now() + 10 * 60 * 1000));
+      const expiresAt = Timestamp.fromDate(new Date(Date.now() + VERIFICATION_CODE_EXPIRY_MS));
       await addDoc(collection(db, 'verificationCodes'), { email, code: newCode, expiresAt });
 
       await emailjs.send(EJS_SERVICE, EJS_TEMPLATE, {
@@ -78,7 +79,7 @@ export default function ForgotPassword() {
 
       // Generar token seguro para autorizar el cambio de contraseña
       const token     = generateToken();
-      const expiresAt = Timestamp.fromDate(new Date(Date.now() + 5 * 60 * 1000));
+      const expiresAt = Timestamp.fromDate(new Date(Date.now() + RESET_TOKEN_EXPIRY_MS));
       await addDoc(collection(db, 'resetTokens'), { email, token, expiresAt });
 
       setResetToken(token);

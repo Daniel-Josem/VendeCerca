@@ -1,16 +1,18 @@
 import { useEffect, useState, useRef } from 'react';
-import { doc, getDoc, updateDoc, collection, query, where, onSnapshot, serverTimestamp, deleteField } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, query, where, onSnapshot, serverTimestamp, deleteField, increment } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import BackButton from '../components/BackButton';
 import ChatDrawer from '../components/ChatDrawer';
+import ShareModal from '../components/ShareModal';
 import { v4 as uuidv4 } from 'uuid';
 import { useToast } from '../context/ToastContext';
 import { requestFCMToken } from '../firebase/messaging';
-import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Circle, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { QRCodeSVG } from 'qrcode.react';
 
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -49,7 +51,11 @@ function orderLabel(s) {
 }
 
 function MapClickHandler({ activeLocId, onSet }) {
-  useMapEvents({ click(e) { if (activeLocId) onSet(activeLocId, e.latlng.lat, e.latlng.lng); } });
+  const locRef = useRef(activeLocId);
+  const setRef = useRef(onSet);
+  useEffect(() => { locRef.current = activeLocId; });
+  useEffect(() => { setRef.current = onSet; });
+  useMapEvents({ click(e) { if (locRef.current) setRef.current(locRef.current, e.latlng.lat, e.latlng.lng); } });
   return null;
 }
 function RecenterMap({ lat, lng }) {
@@ -141,7 +147,7 @@ export default function VendorDashboard() {
   const [countryCode,   setCountryCode]   = useState('+57');
   const [phoneNumber,   setPhoneNumber]   = useState('');
   const [description,   setDescription]  = useState('');
-  const [form,           setForm]           = useState({ name:'', emoji:'🥑', price:'', unit:'pieza', stock:'', imageURL:'' });
+  const [form,           setForm]           = useState({ name:'', emoji:'🥑', price:'', unit:'pieza', stock:'', imageURL:'', images:[] });
   const [editId,         setEditId]         = useState(null);
   const [saving,         setSaving]         = useState(false);
   const [uploadingProd,  setUploadingProd]  = useState(false);
@@ -158,6 +164,19 @@ export default function VendorDashboard() {
   const [newZoneName,   setNewZoneName]   = useState('');
   const [savingZone,    setSavingZone]    = useState(false);
   const [applyZoneId,   setApplyZoneId]   = useState(null);
+  // Mejora 18 — historial de ubicaciones
+  const [locationHistory, setLocationHistory] = useState([]);
+  // Mejora 19 — cupones
+  const [coupons,      setCoupons]      = useState([]);
+  const [couponForm,   setCouponForm]   = useState({ code:'', discount:'', type:'percent', maxUses:'' });
+  const [savingCoupon, setSavingCoupon] = useState(false);
+  // Mejora 20 — pagos
+  const [nequiNumber,  setNequiNumber]  = useState('');
+  // Mejora 21 — compartir
+  const [showShare,    setShowShare]    = useState(false);
+  // Mejora 22 — galería multi-imagen
+  const prodImgRefs = [useRef(null), useRef(null), useRef(null)];
+  const [uploadingSlot, setUploadingSlot] = useState(null); // 0|1|2|null
 
   useEffect(() => {
     if (!currentUser) { navigate('/login'); return; }
@@ -191,6 +210,9 @@ export default function VendorDashboard() {
       setProdLocId(locs[0]?.id || null);
       setActiveLocId(null);
       setSavedZones(d.savedZones || []);
+      setLocationHistory(d.locationHistory || []);
+      setCoupons(d.coupons || []);
+      setNequiNumber(d.nequiNumber || '');
     });
   }, [currentUser]);
 
@@ -295,7 +317,17 @@ export default function VendorDashboard() {
   }
 
   async function toggleLocation(locId) {
-    await saveLocs(locations.map(l => l.id===locId ? {...l, isOnline:!l.isOnline} : l));
+    const loc = locations.find(l => l.id === locId);
+    const goingOnline = loc && !loc.isOnline && loc.lat && loc.lng;
+    const updated = locations.map(l => l.id===locId ? {...l, isOnline:!l.isOnline} : l);
+    if (goingOnline) {
+      // Registrar en historial (mejora 18)
+      const entry = { lat: loc.lat, lng: loc.lng, ts: Date.now(), locName: loc.name };
+      const newHistory = [...locationHistory, entry].slice(-100);
+      setLocationHistory(newHistory);
+      await updateDoc(doc(db, 'vendors', currentUser.uid), { locationHistory: newHistory });
+    }
+    await saveLocs(updated);
   }
 
   function renameLocation(locId, name) {
@@ -415,17 +447,19 @@ export default function VendorDashboard() {
     e.preventDefault();
     if (!form.name) return;
     setSaving(true);
+    const images = (form.images || []).filter(Boolean);
+    const productData = { ...form, images, imageURL: images[0] || form.imageURL || '' };
     const newProducts = editId
-      ? currentProducts.map(p => p.id===editId ? {...form,id:editId} : p)
-      : [...currentProducts, {...form, id:uuidv4()}];
+      ? currentProducts.map(p => p.id===editId ? {...productData,id:editId} : p)
+      : [...currentProducts, {...productData, id:uuidv4()}];
     setEditId(null);
     await saveProducts(newProducts);
-    setForm({ name:'', emoji:'🥑', price:'', unit:'pieza', stock:'', imageURL:'' });
+    setForm({ name:'', emoji:'🥑', price:'', unit:'pieza', stock:'', imageURL:'', images:[] });
     setSaving(false);
   }
 
   async function deleteProduct(id) { await saveProducts(currentProducts.filter(p => p.id!==id)); }
-  function startEdit(p) { setForm({ name:p.name, emoji:p.emoji, price:p.price, unit:p.unit, stock:p.stock, imageURL:p.imageURL||'' }); setEditId(p.id); }
+  function startEdit(p) { setForm({ name:p.name, emoji:p.emoji, price:p.price, unit:p.unit, stock:p.stock, imageURL:p.imageURL||'', images:p.images||[] }); setEditId(p.id); }
 
   async function handleProdImageChange(e) {
     const file = e.target.files?.[0];
@@ -450,6 +484,13 @@ export default function VendorDashboard() {
   // ── Pedidos ──────────────────────────────────────
   async function updateOrderStatus(orderId, newStatus) {
     await updateDoc(doc(db, 'orders', orderId), { status:newStatus, updatedAt:serverTimestamp() });
+    if (newStatus === 'completado') {
+      const order = orders.find(o => o.id === orderId);
+      const amount = order?.total ?? (order?.products||[]).reduce((s,p)=>s+(parseFloat(p.price)||0)*(p.qty||1),0);
+      if (amount > 0) {
+        await updateDoc(doc(db, 'vendors', currentUser.uid), { balance: increment(amount) });
+      }
+    }
     if (newStatus==='en_camino'||newStatus==='listo') {
       const order = orders.find(o => o.id===orderId);
       if (order?.products?.length) {
@@ -510,9 +551,104 @@ export default function VendorDashboard() {
     await updateDoc(doc(db, 'vendors', currentUser.uid), {
       phoneCode:countryCode, phoneNumber,
       phone: countryCode.replace('+','') + phoneNumber, description,
+      nequiNumber,
     });
     setSavingProfile(false);
     toast.success('Perfil guardado correctamente');
+  }
+
+  // ── Historial de ubicaciones: clustering ─────────
+  function haversineM(lat1, lng1, lat2, lng2) {
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  }
+  function clusterHistory(hist) {
+    const clusters = [];
+    for (const pt of hist) {
+      let merged = false;
+      for (const c of clusters) {
+        if (haversineM(c.lat, c.lng, pt.lat, pt.lng) < 300) {
+          c.lat = (c.lat * c.count + pt.lat) / (c.count + 1);
+          c.lng = (c.lng * c.count + pt.lng) / (c.count + 1);
+          c.count++;
+          merged = true;
+          break;
+        }
+      }
+      if (!merged) clusters.push({ lat: pt.lat, lng: pt.lng, count: 1 });
+    }
+    return clusters;
+  }
+
+  // ── Cupones (mejora 19) ──────────────────────────
+  async function handleAddCoupon(e) {
+    e.preventDefault();
+    const code = couponForm.code.trim().toUpperCase();
+    if (!code || !couponForm.discount) { toast.warning('Completa código y descuento'); return; }
+    if (coupons.find(c => c.code === code)) { toast.warning('Ya existe un cupón con ese código'); return; }
+    setSavingCoupon(true);
+    const newCoupon = {
+      id: uuidv4(), code,
+      discount: parseFloat(couponForm.discount),
+      type: couponForm.type,
+      maxUses: couponForm.maxUses ? parseInt(couponForm.maxUses) : null,
+      usedCount: 0, active: true,
+    };
+    const updated = [...coupons, newCoupon];
+    setCoupons(updated);
+    await updateDoc(doc(db, 'vendors', currentUser.uid), { coupons: updated });
+    setCouponForm({ code:'', discount:'', type:'percent', maxUses:'' });
+    setSavingCoupon(false);
+    toast.success(`Cupón "${code}" creado`);
+  }
+
+  async function toggleCoupon(id) {
+    const updated = coupons.map(c => c.id===id ? {...c, active:!c.active} : c);
+    setCoupons(updated);
+    await updateDoc(doc(db, 'vendors', currentUser.uid), { coupons: updated });
+  }
+
+  async function deleteCoupon(id) {
+    const updated = coupons.filter(c => c.id !== id);
+    setCoupons(updated);
+    await updateDoc(doc(db, 'vendors', currentUser.uid), { coupons: updated });
+  }
+
+  // ── Imagen de producto por slot (mejora 22) ──────
+  async function handleProdImageSlot(e, slot) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { toast.error('La imagen debe pesar menos de 5MB'); return; }
+    setUploadingSlot(slot);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('upload_preset', 'vendecerca');
+      const res  = await fetch('https://api.cloudinary.com/v1_1/dhjkhvfmf/image/upload', { method:'POST', body:fd });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+      const url = data.secure_url.replace('/upload/', '/upload/w_400,h_400,c_fill,f_auto,q_auto/');
+      setForm(prev => {
+        const imgs = [...(prev.images || [])];
+        imgs[slot] = url;
+        return { ...prev, images: imgs, imageURL: imgs[0] || '' };
+      });
+    } catch {
+      toast.error('Error subiendo imagen. Intenta de nuevo.');
+    }
+    setUploadingSlot(null);
+    e.target.value = '';
+  }
+
+  function removeImageSlot(slot) {
+    setForm(prev => {
+      const imgs = [...(prev.images || [])];
+      imgs.splice(slot, 1);
+      return { ...prev, images: imgs, imageURL: imgs[0] || '' };
+    });
   }
 
   if (!vendor) return (
@@ -606,6 +742,38 @@ export default function VendorDashboard() {
             </div>
           </div>
         </div>
+
+        {/* SALDO */}
+        {(() => {
+          const balance = vendor.balance || 0;
+          const paidOut = vendor.paidOut || 0;
+          const pending = balance - paidOut;
+          if (balance === 0) return null;
+          return (
+            <div style={{ ...s.section, background:'linear-gradient(135deg,#1a5c1a,#2d7a2d)', color:'#fff', border:'none' }}>
+              <h3 style={{ ...s.sectionTitle, color:'#fff', marginBottom:'0.8rem' }}>💳 Mi saldo en VendeCerca</h3>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'0.6rem' }}>
+                <div style={{ background:'rgba(255,255,255,0.15)', borderRadius:'10px', padding:'0.8rem', textAlign:'center' }}>
+                  <div style={{ fontSize:'1.2rem', fontWeight:800 }}>${balance.toLocaleString()}</div>
+                  <div style={{ fontSize:'0.72rem', opacity:0.8, marginTop:'0.2rem' }}>Total ganado</div>
+                </div>
+                <div style={{ background:'rgba(255,255,255,0.15)', borderRadius:'10px', padding:'0.8rem', textAlign:'center' }}>
+                  <div style={{ fontSize:'1.2rem', fontWeight:800 }}>${paidOut.toLocaleString()}</div>
+                  <div style={{ fontSize:'0.72rem', opacity:0.8, marginTop:'0.2rem' }}>Ya cobrado</div>
+                </div>
+                <div style={{ background: pending>0 ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.1)', borderRadius:'10px', padding:'0.8rem', textAlign:'center', border: pending>0 ? '1.5px solid rgba(255,255,255,0.5)' : 'none' }}>
+                  <div style={{ fontSize:'1.2rem', fontWeight:800 }}>${pending.toLocaleString()}</div>
+                  <div style={{ fontSize:'0.72rem', opacity:0.8, marginTop:'0.2rem' }}>Por cobrar</div>
+                </div>
+              </div>
+              {pending > 0 && (
+                <p style={{ fontSize:'0.75rem', opacity:0.75, margin:'0.6rem 0 0', textAlign:'center' }}>
+                  El equipo de VendeCerca procesará tu pago pronto.
+                </p>
+              )}
+            </div>
+          );
+        })()}
 
         {/* ESTADÍSTICAS */}
         <div style={s.section}>
@@ -719,7 +887,7 @@ export default function VendorDashboard() {
           </p>
           <div style={s.mapWrap}>
             <MapContainer center={mapCenter} zoom={14} style={{ height:'200px', width:'100%' }}>
-              <TileLayer url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png" attribution='© OpenStreetMap © CARTO' />
+              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' />
               <MapClickHandler activeLocId={activeLocId} onSet={setLocationPos} />
               {activeLoc?.lat && <RecenterMap lat={activeLoc.lat} lng={activeLoc.lng} />}
               {locations.filter(l=>l.lat).map(l => <Marker key={l.id} position={[l.lat,l.lng]} />)}
@@ -804,6 +972,162 @@ export default function VendorDashboard() {
           )}
         </div>
 
+        {/* ── HISTORIAL DE ZONAS (mejora 18) ── */}
+        <div style={s.section}>
+          <h3 style={{ ...s.sectionTitle, marginBottom:'0.5rem' }}>🗺️ Mapa de actividad</h3>
+          <p style={{ fontSize:'0.8rem', color:'var(--text-3)', marginBottom:'0.9rem', marginTop:0 }}>
+            Las zonas donde más has vendido — círculo más grande significa más visitas.
+          </p>
+          {locationHistory.length === 0 ? (
+            <p style={s.empty}>Sin historial aún. Aparece cuando activas una sede por primera vez.</p>
+          ) : (() => {
+            const clusters = clusterHistory(locationHistory);
+            const maxCount = Math.max(...clusters.map(c => c.count));
+            const center   = clusters.reduce((acc, c) => ({ lat: acc.lat + c.lat/clusters.length, lng: acc.lng + c.lng/clusters.length }), { lat:0, lng:0 });
+            return (
+              <div style={s.mapWrap}>
+                <MapContainer center={[center.lat, center.lng]} zoom={13} style={{ height:'200px', width:'100%' }} scrollWheelZoom={false}>
+                  <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' />
+                  {clusters.map((c, i) => (
+                    <Circle key={i}
+                      center={[c.lat, c.lng]}
+                      radius={40 + (c.count / maxCount) * 120}
+                      pathOptions={{ color:'#2d7a2d', fillColor:'#2d7a2d', fillOpacity: 0.3 + (c.count/maxCount)*0.4, weight:2 }}
+                    />
+                  ))}
+                </MapContainer>
+              </div>
+            );
+          })()}
+          {locationHistory.length > 0 && (
+            <p style={{ fontSize:'0.72rem', color:'var(--text-3)', marginTop:'0.4rem', textAlign:'right' }}>
+              {locationHistory.length} registro{locationHistory.length !== 1 ? 's' : ''}
+            </p>
+          )}
+        </div>
+
+        {/* ── CUPONES (mejora 19) ── */}
+        <div style={s.section}>
+          <h3 style={{ ...s.sectionTitle, marginBottom:'0.9rem' }}>🎟️ Cupones de descuento</h3>
+          <p style={{ fontSize:'0.8rem', color:'var(--text-3)', marginBottom:'0.9rem', marginTop:'-0.4rem' }}>
+            Crea cupones para que tus compradores obtengan descuentos en sus pedidos.
+          </p>
+
+          <form onSubmit={handleAddCoupon} style={s.couponForm}>
+            <input className="app-input" placeholder="Código (ej: PROMO10)"
+              value={couponForm.code}
+              onChange={e => setCouponForm(f => ({ ...f, code: e.target.value.toUpperCase() }))}
+              style={{ flex:2, minWidth:'100px' }} required />
+            <input className="app-input" placeholder="Descuento" type="number" min="1"
+              value={couponForm.discount}
+              onChange={e => setCouponForm(f => ({ ...f, discount: e.target.value }))}
+              style={{ width:'90px' }} required />
+            <select className="app-input" value={couponForm.type}
+              onChange={e => setCouponForm(f => ({ ...f, type: e.target.value }))}
+              style={{ width:'70px' }}>
+              <option value="percent">%</option>
+              <option value="fixed">$</option>
+            </select>
+            <input className="app-input" placeholder="Máx. usos" type="number" min="1"
+              value={couponForm.maxUses}
+              onChange={e => setCouponForm(f => ({ ...f, maxUses: e.target.value }))}
+              style={{ width:'90px' }} title="Máximo de usos (vacío = ilimitado)" />
+            <button style={s.saveBtn} type="submit" disabled={savingCoupon}>
+              {savingCoupon ? '...' : '+ Crear'}
+            </button>
+          </form>
+
+          {coupons.length === 0 ? (
+            <p style={{ ...s.empty, marginTop:'0.8rem' }}>Sin cupones creados aún.</p>
+          ) : (
+            <div style={{ display:'flex', flexDirection:'column', gap:'0.4rem', marginTop:'0.8rem' }}>
+              {coupons.map(c => (
+                <div key={c.id} style={{ ...s.couponCard, opacity: c.active ? 1 : 0.55 }}>
+                  <div style={s.couponLeft}>
+                    <span style={s.couponCode}>{c.code}</span>
+                    <span style={s.couponDetail}>
+                      {c.type === 'percent' ? `${c.discount}% off` : `$${c.discount.toLocaleString()} off`}
+                      {' · '}{c.usedCount} uso{c.usedCount !== 1 ? 's' : ''}
+                      {c.maxUses ? ` / ${c.maxUses}` : ''}
+                    </span>
+                  </div>
+                  <div style={s.couponRight}>
+                    <button
+                      style={{ ...s.couponToggle, background: c.active ? '#dcfce7' : '#f3f4f6', color: c.active ? '#166534' : '#666' }}
+                      onClick={() => toggleCoupon(c.id)}>
+                      {c.active ? 'Activo' : 'Inactivo'}
+                    </button>
+                    <button style={s.locDeleteBtn} onClick={() => deleteCoupon(c.id)}>🗑️</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ── PERFIL Y PAGOS (mejora 20 + perfil) ── */}
+        <div style={s.section}>
+          <h3 style={{ ...s.sectionTitle, marginBottom:'0.9rem' }}>👤 Perfil y pagos</h3>
+          <form onSubmit={handleSaveProfile} style={{ display:'flex', flexDirection:'column', gap:'0.7rem' }}>
+            <div>
+              <label style={s.label}>Descripción del negocio</label>
+              <textarea className="app-input" placeholder="Cuéntales a tus clientes qué vendes..."
+                value={description} onChange={e => setDescription(e.target.value)}
+                style={{ marginTop:'0.25rem', resize:'vertical', minHeight:'70px' }} />
+            </div>
+            <div>
+              <label style={s.label}>Teléfono / WhatsApp</label>
+              <div style={{ display:'flex', gap:'0.4rem', marginTop:'0.25rem' }}>
+                <select className="app-input" value={countryCode} onChange={e => setCountryCode(e.target.value)} style={{ width:'110px', flexShrink:0 }}>
+                  {COUNTRY_CODES.map(c => (
+                    <option key={c.code} value={c.code}>{c.flag} {c.code}</option>
+                  ))}
+                </select>
+                <input className="app-input" placeholder="Número de teléfono" type="tel"
+                  value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} style={{ flex:1 }} />
+              </div>
+            </div>
+            <div>
+              <label style={s.label}>📱 Número Nequi / Daviplata</label>
+              <input className="app-input" placeholder="Ej: 3001234567"
+                value={nequiNumber} onChange={e => setNequiNumber(e.target.value)} style={{ marginTop:'0.25rem' }} />
+              <p style={{ fontSize:'0.73rem', color:'var(--text-3)', margin:'0.2rem 0 0' }}>
+                Los compradores verán este número al pagar con Nequi.
+              </p>
+            </div>
+            <button style={{ ...s.saveBtn, alignSelf:'flex-start' }} type="submit" disabled={savingProfile}>
+              {savingProfile ? 'Guardando...' : '💾 Guardar perfil'}
+            </button>
+          </form>
+        </div>
+
+        {/* ── MI ENLACE Y QR (mejora 21) ── */}
+        <div style={s.section}>
+          <h3 style={{ ...s.sectionTitle, marginBottom:'0.5rem' }}>📲 Mi enlace y QR</h3>
+          <p style={{ fontSize:'0.8rem', color:'var(--text-3)', marginBottom:'1rem', marginTop:0 }}>
+            Comparte tu perfil con clientes para que te encuentren y hagan pedidos.
+          </p>
+          <div style={s.qrSection}>
+            <div style={s.qrBox}>
+              <QRCodeSVG value={`${window.location.origin}/vendor/${currentUser.uid}`} size={120} fgColor="#1a5c1a" bgColor="transparent" />
+            </div>
+            <div style={s.qrInfo}>
+              <p style={s.qrUrl}>
+                {`${window.location.origin}/vendor/${currentUser.uid}`.replace('https://', '')}
+              </p>
+              <button style={s.shareBtn} onClick={() => setShowShare(true)}>
+                📤 Compartir perfil
+              </button>
+              <button style={s.copyLinkBtn} onClick={() => {
+                navigator.clipboard.writeText(`${window.location.origin}/vendor/${currentUser.uid}`).catch(() => {});
+                toast.success('Enlace copiado al portapapeles');
+              }}>
+                📋 Copiar enlace
+              </button>
+            </div>
+          </div>
+        </div>
+
         {/* PRODUCTOS POR SEDE */}
         <div style={s.section}>
           <div style={s.sectionHead}>
@@ -832,21 +1156,35 @@ export default function VendorDashboard() {
                   ))}
                 </div>
 
-                {/* Foto del producto */}
+                {/* Fotos del producto — hasta 3 imágenes (mejora 22) */}
                 <div style={s.prodImgRow}>
-                  <div style={s.prodImgPreview} onClick={() => prodImgRef.current?.click()}>
-                    {uploadingProd ? (
-                      <span style={{ fontSize:'0.75rem', color:'var(--text-3)' }}>Subiendo...</span>
-                    ) : form.imageURL ? (
-                      <img src={form.imageURL} alt="producto" style={s.prodImgThumb} />
-                    ) : (
-                      <span style={{ fontSize:'0.75rem', color:'var(--text-3)', textAlign:'center', lineHeight:1.3 }}>📷<br/>Foto</span>
-                    )}
-                    <input ref={prodImgRef} type="file" accept="image/*" style={{ display:'none' }} onChange={handleProdImageChange} />
-                  </div>
-                  {form.imageURL && (
-                    <button type="button" style={s.removeProdImg} onClick={() => setForm({...form, imageURL:''})}>✕ Quitar foto</button>
-                  )}
+                  {[0, 1, 2].map(slot => {
+                    const src = (form.images || [])[slot];
+                    return (
+                      <div key={slot} style={{ position:'relative', flexShrink:0 }}>
+                        <div style={{ ...s.prodImgPreview, borderStyle: slot === 0 ? 'dashed' : 'dotted', borderColor: slot === 0 ? 'var(--green)' : 'var(--border)' }}
+                          onClick={() => prodImgRefs[slot].current?.click()}>
+                          {uploadingSlot === slot ? (
+                            <span style={{ fontSize:'0.65rem', color:'var(--text-3)' }}>⏳</span>
+                          ) : src ? (
+                            <img src={src} alt="" style={s.prodImgThumb} />
+                          ) : (
+                            <span style={{ fontSize:'0.65rem', color:'var(--text-3)', textAlign:'center', lineHeight:1.3 }}>
+                              {slot === 0 ? '📷\nFoto' : `+${slot+1}`}
+                            </span>
+                          )}
+                          <input ref={prodImgRefs[slot]} type="file" accept="image/*" style={{ display:'none' }}
+                            onChange={e => handleProdImageSlot(e, slot)} />
+                        </div>
+                        {src && (
+                          <button type="button" style={s.imgSlotRemove} onClick={() => removeImageSlot(slot)}>✕</button>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <span style={{ fontSize:'0.72rem', color:'var(--text-3)', alignSelf:'center', marginLeft:'0.3rem' }}>
+                    Foto principal + hasta 2 fotos extra
+                  </span>
                 </div>
 
                 <div style={s.prodFormRow}>
@@ -863,25 +1201,33 @@ export default function VendorDashboard() {
 
               <div style={s.prodList}>
                 {currentProducts.length===0 && <p style={s.empty}>Sin productos en esta sede. ¡Agrega uno arriba!</p>}
-                {currentProducts.map(p => (
-                  <div key={p.id} style={s.prodCard}>
-                    {p.imageURL
-                      ? <img src={p.imageURL} alt={p.name} style={s.prodCardImg} />
-                      : <span style={{ fontSize:'1.7rem', width:'44px', textAlign:'center' }}>{p.emoji}</span>
-                    }
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontWeight:600, fontSize:'0.92rem' }}>{p.name}</div>
-                      <div style={{ fontSize:'0.78rem', color:'var(--text-2)' }}>
-                        ${p.price}/{p.unit}
-                        {p.stock && <span style={{ marginLeft:'0.5rem', color: parseInt(p.stock)<=3?'#dc2626':'#2d7a2d', fontWeight:600 }}>
-                          · Stock: {p.stock}
-                        </span>}
+                {currentProducts.map(p => {
+                  const allImgs = p.images?.filter(Boolean).length ? p.images.filter(Boolean) : (p.imageURL ? [p.imageURL] : []);
+                  return (
+                    <div key={p.id} style={s.prodCard}>
+                      <div style={{ position:'relative', flexShrink:0 }}>
+                        {allImgs.length > 0
+                          ? <img src={allImgs[0]} alt={p.name} style={s.prodCardImg} />
+                          : <span style={{ fontSize:'1.7rem', width:'44px', textAlign:'center' }}>{p.emoji}</span>
+                        }
+                        {allImgs.length > 1 && (
+                          <span style={s.prodImgBadge}>{allImgs.length}📷</span>
+                        )}
                       </div>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontWeight:600, fontSize:'0.92rem' }}>{p.name}</div>
+                        <div style={{ fontSize:'0.78rem', color:'var(--text-2)' }}>
+                          ${p.price}/{p.unit}
+                          {p.stock && <span style={{ marginLeft:'0.5rem', color: parseInt(p.stock)<=3?'#dc2626':'#2d7a2d', fontWeight:600 }}>
+                            · Stock: {p.stock}
+                          </span>}
+                        </div>
+                      </div>
+                      <button style={s.iconBtn} onClick={() => startEdit(p)}>✏️</button>
+                      <button style={s.iconBtn} onClick={() => deleteProduct(p.id)}>🗑️</button>
                     </div>
-                    <button style={s.iconBtn} onClick={() => startEdit(p)}>✏️</button>
-                    <button style={s.iconBtn} onClick={() => deleteProduct(p.id)}>🗑️</button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </>
           )}
@@ -893,6 +1239,9 @@ export default function VendorDashboard() {
 
     {chatOrder && (
       <ChatDrawer order={chatOrder} onClose={() => setChatOrder(null)} />
+    )}
+    {showShare && (
+      <ShareModal vendorId={currentUser.uid} vendorName={vendor.name} onClose={() => setShowShare(false)} />
     )}
     </>
   );
@@ -1018,6 +1367,27 @@ const s = {
   zoneApplyPicker:{ display:'flex', alignItems:'center', gap:'0.3rem', flexWrap:'wrap' },
   zoneLocBtn:     { fontSize:'0.75rem', padding:'0.22rem 0.55rem', background:'var(--green)', color:'#fff', border:'none', borderRadius:'20px', cursor:'pointer', fontFamily:'inherit', fontWeight:600, whiteSpace:'nowrap' },
   zoneCancelBtn:  { fontSize:'0.78rem', padding:'0.22rem 0.4rem', background:'none', border:'none', cursor:'pointer', color:'var(--text-3)', fontFamily:'inherit' },
+
+  /* Mejora 19 — cupones */
+  couponForm:   { display:'flex', gap:'0.4rem', flexWrap:'wrap', alignItems:'center' },
+  couponCard:   { display:'flex', alignItems:'center', justifyContent:'space-between', gap:'0.5rem', background:'var(--bg)', border:'1.5px solid var(--border)', borderRadius:'var(--radius)', padding:'0.55rem 0.75rem' },
+  couponLeft:   { display:'flex', flexDirection:'column', gap:'0.1rem', flex:1, minWidth:0 },
+  couponCode:   { fontWeight:700, fontSize:'0.88rem', color:'var(--text)', letterSpacing:'0.04em', fontFamily:'monospace' },
+  couponDetail: { fontSize:'0.73rem', color:'var(--text-2)' },
+  couponRight:  { display:'flex', alignItems:'center', gap:'0.35rem', flexShrink:0 },
+  couponToggle: { fontSize:'0.75rem', padding:'0.2rem 0.55rem', border:'none', borderRadius:'20px', cursor:'pointer', fontFamily:'inherit', fontWeight:600 },
+
+  /* Mejora 21 — QR / compartir */
+  qrSection:    { display:'flex', alignItems:'center', gap:'1.2rem', flexWrap:'wrap' },
+  qrBox:        { background:'var(--bg)', border:'1.5px solid var(--border)', borderRadius:'14px', padding:'0.7rem', flexShrink:0 },
+  qrInfo:       { display:'flex', flexDirection:'column', gap:'0.5rem', flex:1 },
+  qrUrl:        { fontSize:'0.72rem', color:'var(--text-3)', fontFamily:'monospace', wordBreak:'break-all', margin:0 },
+  shareBtn:     { padding:'0.55rem 1rem', background:'var(--green)', color:'#fff', border:'none', borderRadius:'var(--radius-sm)', cursor:'pointer', fontWeight:600, fontSize:'0.85rem', fontFamily:'inherit' },
+  copyLinkBtn:  { padding:'0.5rem 1rem', background:'var(--green-light)', color:'var(--green)', border:'1.5px solid var(--green-border)', borderRadius:'var(--radius-sm)', cursor:'pointer', fontWeight:600, fontSize:'0.85rem', fontFamily:'inherit' },
+
+  /* Mejora 22 — galería multi-imagen */
+  imgSlotRemove:{ position:'absolute', top:'-4px', right:'-4px', width:'18px', height:'18px', borderRadius:'50%', background:'#dc2626', color:'#fff', border:'none', cursor:'pointer', fontSize:'0.65rem', display:'flex', alignItems:'center', justifyContent:'center', padding:0 },
+  prodImgBadge: { position:'absolute', bottom:'-2px', right:'-2px', background:'rgba(0,0,0,0.65)', color:'#fff', fontSize:'0.58rem', fontWeight:700, borderRadius:'20px', padding:'1px 4px' },
 
   /* Estadísticas */
   statsGrid:    { display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'0.6rem' },
