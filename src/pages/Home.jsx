@@ -128,8 +128,8 @@ export default function Home() {
   const [filterRating, setFilterRating] = useState(0);
   const [filterDist,   setFilterDist]   = useState(0);
   const [sortBy,       setSortBy]       = useState('dist');
-  // En móvil el mapa no se monta hasta que el usuario lo pida por primera vez
-  const [mapMounted,   setMapMounted]   = useState(!isMobile);
+  // El mapa se precarga siempre para que esté listo cuando el usuario cambia de vista
+  const [mapMounted,   setMapMounted]   = useState(true);
 
   function flyToSede(v, loc) {
     if (!mapRef.current || !loc.lat) return;

@@ -16,11 +16,14 @@ export default function Login() {
   const [loading, setLoading]   = useState(false);
   const navigate = useNavigate();
   const toast    = useToast();
-  const { currentUser } = useAuth();
+  const { currentUser, loading: authLoading } = useAuth();
 
   useEffect(() => {
     if (currentUser) navigate('/');
   }, [currentUser]);
+
+  // No mostrar el formulario mientras se resuelve el auth o ya hay sesión activa
+  if (authLoading || currentUser) return null;
 
   async function handleSubmit(e) {
     e.preventDefault();

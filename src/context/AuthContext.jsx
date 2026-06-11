@@ -47,11 +47,19 @@ export function AuthProvider({ children }) {
         try {
           const userDoc = await getDoc(doc(db, 'users', user.uid));
           if (userDoc.exists()) {
-            setUserRole(userDoc.data().role);
-            setUserName(userDoc.data().name);
+            const role = userDoc.data().role;
+            const name = userDoc.data().name;
+            setUserRole(role);
+            setUserName(name);
+            localStorage.setItem(`vc_role_${user.uid}`, role);
+            if (name) localStorage.setItem(`vc_name_${user.uid}`, name);
           }
         } catch {
-          // Firestore error — igual dejamos entrar al usuario
+          // Firestore falló (móvil sin señal) — usar caché local
+          const cached = localStorage.getItem(`vc_role_${user.uid}`);
+          const cachedName = localStorage.getItem(`vc_name_${user.uid}`);
+          if (cached) setUserRole(cached);
+          if (cachedName) setUserName(cachedName);
         }
         setCurrentUser(user);
       } else {
