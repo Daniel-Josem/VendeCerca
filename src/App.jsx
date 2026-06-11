@@ -6,6 +6,7 @@ import { ToastProvider } from './context/ToastContext';
 import { ThemeProvider } from './context/ThemeContext';
 import Navbar from './components/Navbar';
 import ErrorBoundary from './components/ErrorBoundary';
+import ActiveOrderChat from './components/ActiveOrderChat';
 
 const Home           = lazy(() => import('./pages/Home'));
 const Landing        = lazy(() => import('./pages/Landing'));
@@ -67,6 +68,7 @@ export default function App() {
             <BrowserRouter>
               <Navbar />
               <AnimatedRoutes />
+              <ActiveOrderChat />
             </BrowserRouter>
           </ToastProvider>
         </ThemeProvider>
