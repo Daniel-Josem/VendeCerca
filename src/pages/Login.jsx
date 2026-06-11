@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
 import { useNavigate, Link } from 'react-router-dom';
 import { useToast } from '../context/ToastContext';
+import { useAuth } from '../context/AuthContext';
 import usePageMeta from '../hooks/usePageMeta';
 
 const googleProvider = new GoogleAuthProvider();
@@ -15,6 +16,11 @@ export default function Login() {
   const [loading, setLoading]   = useState(false);
   const navigate = useNavigate();
   const toast    = useToast();
+  const { currentUser } = useAuth();
+
+  useEffect(() => {
+    if (currentUser) navigate('/');
+  }, [currentUser]);
 
   async function handleSubmit(e) {
     e.preventDefault();

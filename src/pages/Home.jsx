@@ -4,6 +4,7 @@ import { db } from '../firebase/config';
 import { MapContainer, TileLayer, Marker, Popup, useMap, Circle } from 'react-leaflet';
 import L from 'leaflet';
 import { LIVE_LOCATION_FRESHNESS_MS, MAP_DEFAULT_ZOOM, MAP_FLY_ZOOM, PRODUCTS_PREVIEW_COUNT } from '../config/constants';
+import { getTier } from '../config/plans';
 import 'leaflet/dist/leaflet.css';
 import { Link } from 'react-router-dom';
 import OrderModal from '../components/OrderModal';
@@ -205,6 +206,13 @@ export default function Home() {
     })
     .filter(v => filterDist > 0 ? (v.distance === null || v.distance <= filterDist) : true)
     .sort((a, b) => {
+      // Verificados y destacados siempre primero
+      const aFeat = (a.isFeatured && a.featuredExpiry > Date.now()) ? 1 : 0;
+      const bFeat = (b.isFeatured && b.featuredExpiry > Date.now()) ? 1 : 0;
+      if (bFeat !== aFeat) return bFeat - aFeat;
+      const aVerif = a.isVerified ? 1 : 0;
+      const bVerif = b.isVerified ? 1 : 0;
+      if (bVerif !== aVerif) return bVerif - aVerif;
       if (sortBy === 'rating') return (b.rating || 0) - (a.rating || 0);
       if (sortBy === 'name')   return (a.name || '').localeCompare(b.name || '');
       return (a.distance ?? Infinity) - (b.distance ?? Infinity);
@@ -338,8 +346,13 @@ export default function Home() {
                 className={`anim-fade-up delay-${Math.min(i + 1, 5)}`}
                 style={{ ...s.card, ...(isSelected ? s.cardActive : {}) }}
               >
-                {/* Badge más cercano */}
-                {isNearest && (
+                {/* Badge más cercano / destacado */}
+                {(v.isFeatured && v.featuredExpiry > Date.now()) && (
+                  <div style={{ ...s.nearestBadge, background:'#fef3c7', color:'#92400e' }}>
+                    ⭐ Destacado
+                  </div>
+                )}
+                {isNearest && !(v.isFeatured && v.featuredExpiry > Date.now()) && (
                   <div style={s.nearestBadge}>
                     🏆 {search ? `Más cercano con "${search}"` : 'Más cercano'}
                   </div>
@@ -354,6 +367,8 @@ export default function Home() {
                   <div style={s.cardInfo}>
                     <div style={{ display:'flex', alignItems:'center', gap:'0.35rem', flexWrap:'wrap' }}>
                       <span style={s.vendorName}>{v.name}</span>
+                      {v.isVerified && <span style={{ fontSize:'0.7rem', background:'#dbeafe', color:'#1d4ed8', padding:'0.1rem 0.4rem', borderRadius:'20px', fontWeight:700 }}>✅</span>}
+                      {(() => { const t = getTier(v.completedSales||0); return t.id !== 'bronze' ? <span style={{ fontSize:'0.7rem' }}>{t.icon}</span> : null; })()}
                       {isLiveFresh(v) && <span style={s.liveBadge}>🔴 En vivo</span>}
                     </div>
                     {v.rating > 0 && (

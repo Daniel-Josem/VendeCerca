@@ -2,7 +2,8 @@ import { useState } from 'react';
 import usePageMeta from '../hooks/usePageMeta';
 import { VERIFICATION_CODE_EXPIRY_MS } from '../config/constants';
 import { createUserWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
-import { doc, setDoc, getDoc, collection, addDoc, query, where, getDocs, deleteDoc, serverTimestamp, Timestamp } from 'firebase/firestore';
+import { doc, setDoc, getDoc, collection, addDoc, query, where, getDocs, deleteDoc, serverTimestamp, Timestamp, updateDoc, increment } from 'firebase/firestore';
+import { generateReferralCode, REFERRAL_REWARD } from '../config/plans';
 import emailjs from '@emailjs/browser';
 import { auth, db } from '../firebase/config';
 import { useNavigate, Link } from 'react-router-dom';
@@ -18,9 +19,22 @@ function generateCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
+async function applyReferral(newUserId, referralCode) {
+  if (!referralCode) return;
+  const code = referralCode.trim().toUpperCase();
+  const snap = await getDocs(query(collection(db, 'vendors'), where('referralCode', '==', code)));
+  if (snap.empty) return;
+  const referrerId = snap.docs[0].id;
+  if (referrerId === newUserId) return;
+  await Promise.all([
+    updateDoc(doc(db, 'vendors', referrerId), { coins: increment(REFERRAL_REWARD) }),
+    updateDoc(doc(db, 'users', newUserId), { referredBy: referrerId }),
+  ]);
+}
+
 export default function Register() {
   usePageMeta({ title: 'Registrarse', description: 'Crea tu cuenta gratis en VendeCerca. Compra productos locales o vende desde tu barrio.' });
-  const [form, setForm]     = useState({ name: '', email: '', password: '', role: 'buyer' });
+  const [form, setForm]     = useState({ name: '', email: '', password: '', role: 'buyer', referralCode: '' });
   const [step, setStep]     = useState('form'); // 'form' | 'verify'
   const [code, setCode]     = useState('');
   const [loading, setLoading] = useState(false);
@@ -85,17 +99,21 @@ export default function Register() {
 
       // Código correcto → crear cuenta
       const { user } = await createUserWithEmailAndPassword(auth, form.email, form.password);
+      const myReferralCode = generateReferralCode(user.uid);
       await setDoc(doc(db, 'users', user.uid), {
-        name: form.name, email: form.email, role: form.role, createdAt: serverTimestamp(),
+        name: form.name, email: form.email, role: form.role,
+        referralCode: myReferralCode, createdAt: serverTimestamp(),
       });
       if (form.role === 'vendor') {
         await setDoc(doc(db, 'vendors', user.uid), {
           userId: user.uid, name: form.name, description: '', phone: '',
           location: null, isOnline: false, products: [],
-          rating: 0, ratingsCount: 0, createdAt: serverTimestamp(),
+          rating: 0, ratingsCount: 0, referralCode: myReferralCode,
+          coins: 0, completedSales: 0, tier: 'bronze',
+          createdAt: serverTimestamp(),
         });
       }
-
+      await applyReferral(user.uid, form.referralCode);
       navigate(form.role === 'vendor' ? '/dashboard' : '/');
     } catch (err) {
       toast.error(err.message?.includes('email-already-in-use') ? 'Ese correo ya está registrado' : 'Error al crear la cuenta');
@@ -112,19 +130,22 @@ export default function Register() {
       if (userDoc.exists()) { navigate('/'); return; }
 
       const name = user.displayName || user.email;
+      const myReferralCode = generateReferralCode(user.uid);
       await setDoc(doc(db, 'users', user.uid), {
-        name, email: user.email, role: form.role, createdAt: serverTimestamp(),
+        name, email: user.email, role: form.role,
+        referralCode: myReferralCode, createdAt: serverTimestamp(),
       });
       if (form.role === 'vendor') {
         await setDoc(doc(db, 'vendors', user.uid), {
           userId: user.uid, name, description: '', phone: '',
           location: null, isOnline: false, products: [],
-          rating: 0, ratingsCount: 0, createdAt: serverTimestamp(),
+          rating: 0, ratingsCount: 0, referralCode: myReferralCode,
+          coins: 0, completedSales: 0, tier: 'bronze',
+          createdAt: serverTimestamp(),
         });
-        navigate('/dashboard');
-      } else {
-        navigate('/');
       }
+      await applyReferral(user.uid, form.referralCode);
+      navigate(form.role === 'vendor' ? '/dashboard' : '/');
     } catch {
       toast.error('No se pudo registrar con Google');
     }
@@ -232,6 +253,10 @@ export default function Register() {
           <div style={s.field}>
             <label style={s.label}>Contraseña</label>
             <input className="app-input" style={s.input} name="password" type="password" placeholder="Mínimo 6 caracteres" value={form.password} onChange={handleChange} required minLength={6} />
+          </div>
+          <div style={s.field}>
+            <label style={s.label}>Código de referido <span style={{ color:'var(--text-3)', fontWeight:400 }}>(opcional)</span></label>
+            <input className="app-input" style={{ ...s.input, textTransform:'uppercase' }} name="referralCode" placeholder="Ej: A1B2C3D4" value={form.referralCode} onChange={e => setForm({ ...form, referralCode: e.target.value.toUpperCase() })} maxLength={8} />
           </div>
           <button
             style={{ ...s.btn, opacity: loading || !form.name || !form.email || form.password.length < 6 ? 0.6 : 1 }}

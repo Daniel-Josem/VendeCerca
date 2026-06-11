@@ -8,6 +8,7 @@ import ChatDrawer from '../components/ChatDrawer';
 import ShareModal from '../components/ShareModal';
 import { v4 as uuidv4 } from 'uuid';
 import { useToast } from '../context/ToastContext';
+import { getPlan, getTier, generateReferralCode, FEATURED_COST } from '../config/plans';
 import { requestFCMToken } from '../firebase/messaging';
 import { MapContainer, TileLayer, Marker, Circle, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
@@ -177,6 +178,15 @@ export default function VendorDashboard() {
   // Mejora 22 — galería multi-imagen
   const prodImgRefs = [useRef(null), useRef(null), useRef(null)];
   const [uploadingSlot, setUploadingSlot] = useState(null); // 0|1|2|null
+  // Monetización / gamificación
+  const [plan,           setPlan]           = useState('free');
+  const [isFeatured,     setIsFeatured]     = useState(false);
+  const [featuredExpiry, setFeaturedExpiry] = useState(null);
+  const [isVerified,     setIsVerified]     = useState(false);
+  const [verifStatus,    setVerifStatus]    = useState('none');
+  const [coins,          setCoins]          = useState(0);
+  const [completedSales, setCompletedSales] = useState(0);
+  const [referralCode,   setReferralCode]   = useState('');
 
   useEffect(() => {
     if (!currentUser) { navigate('/login'); return; }
@@ -213,6 +223,16 @@ export default function VendorDashboard() {
       setLocationHistory(d.locationHistory || []);
       setCoupons(d.coupons || []);
       setNequiNumber(d.nequiNumber || '');
+      setPlan(d.plan || 'free');
+      setIsFeatured(d.isFeatured || false);
+      setFeaturedExpiry(d.featuredExpiry || null);
+      setIsVerified(d.isVerified || false);
+      setVerifStatus(d.verificationStatus || 'none');
+      setCoins(d.coins || 0);
+      setCompletedSales(d.completedSales || 0);
+      const code = d.referralCode || generateReferralCode(currentUser.uid);
+      setReferralCode(code);
+      if (!d.referralCode) updateDoc(doc(db, 'vendors', currentUser.uid), { referralCode: code });
     });
   }, [currentUser]);
 
@@ -308,6 +328,11 @@ export default function VendorDashboard() {
   }
 
   function addLocation() {
+    const planData = getPlan(plan);
+    if (locations.length >= planData.maxBranches) {
+      toast.error(`Tu plan ${planData.name} permite máximo ${planData.maxBranches} sede${planData.maxBranches !== 1 ? 's' : ''}. Actualiza tu plan para agregar más.`);
+      return;
+    }
     const newLoc = { id:uuidv4(), name:`Sede ${locations.length+1}`, lat:null, lng:null, isOnline:false, products:[] };
     const updated = [...locations, newLoc];
     setLocations(updated);
@@ -446,6 +471,14 @@ export default function VendorDashboard() {
   async function handleAddProduct(e) {
     e.preventDefault();
     if (!form.name) return;
+    if (!editId) {
+      const planData = getPlan(plan);
+      const totalProds = locations.reduce((sum, l) => sum + (l.products || []).length, 0);
+      if (totalProds >= planData.maxProducts) {
+        toast.error(`Tu plan ${planData.name} permite máximo ${planData.maxProducts} productos. Actualiza tu plan para agregar más.`);
+        return;
+      }
+    }
     setSaving(true);
     const images = (form.images || []).filter(Boolean);
     const productData = { ...form, images, imageURL: images[0] || form.imageURL || '' };
@@ -487,9 +520,13 @@ export default function VendorDashboard() {
     if (newStatus === 'completado') {
       const order = orders.find(o => o.id === orderId);
       const amount = order?.total ?? (order?.products||[]).reduce((s,p)=>s+(parseFloat(p.price)||0)*(p.qty||1),0);
-      if (amount > 0) {
-        await updateDoc(doc(db, 'vendors', currentUser.uid), { balance: increment(amount) });
-      }
+      const newSales = completedSales + 1;
+      const newTier  = getTier(newSales);
+      const updates  = { completedSales: increment(1), tier: newTier.id, coins: increment(1) };
+      if (amount > 0) updates.balance = increment(amount);
+      await updateDoc(doc(db, 'vendors', currentUser.uid), updates);
+      setCompletedSales(newSales);
+      setCoins(prev => prev + 1);
     }
     if (newStatus==='en_camino'||newStatus==='listo') {
       const order = orders.find(o => o.id===orderId);
@@ -651,6 +688,32 @@ export default function VendorDashboard() {
     });
   }
 
+  async function requestVerification() {
+    if (verifStatus === 'pending') { toast.info('Tu solicitud ya está en proceso'); return; }
+    await updateDoc(doc(db, 'vendors', currentUser.uid), {
+      verificationStatus: 'pending',
+      verificationRequestedAt: serverTimestamp(),
+    });
+    setVerifStatus('pending');
+    toast.success('Solicitud enviada. El equipo la revisará pronto.');
+  }
+
+  async function featureProfile(days) {
+    const cost = days === 1 ? FEATURED_COST.day : FEATURED_COST.week;
+    if (coins < cost) {
+      toast.error(`Necesitas ${cost} 🪙 para destacar ${days === 1 ? '24 horas' : '1 semana'}. Tienes ${coins}.`);
+      return;
+    }
+    const expiry = Date.now() + days * 24 * 3600 * 1000;
+    await updateDoc(doc(db, 'vendors', currentUser.uid), {
+      isFeatured: true, featuredExpiry: expiry, coins: increment(-cost),
+    });
+    setIsFeatured(true);
+    setFeaturedExpiry(expiry);
+    setCoins(prev => prev - cost);
+    toast.success(`¡Perfil destacado por ${days === 1 ? '24 horas' : '1 semana'}! ⭐`);
+  }
+
   if (!vendor) return (
     <div style={s.page}>
       <div style={s.container}>
@@ -668,10 +731,13 @@ export default function VendorDashboard() {
     </div>
   );
 
-  const activeLoc   = locations.find(l => l.id===activeLocId);
-  const mapCenter   = activeLoc?.lat ? [activeLoc.lat, activeLoc.lng] : [4.7109, -74.0721];
+  const activeLoc    = locations.find(l => l.id===activeLocId);
+  const mapCenter    = activeLoc?.lat ? [activeLoc.lat, activeLoc.lng] : [4.7109, -74.0721];
   const pendingCount = orders.filter(o => o.status==='pendiente').length;
   const onlineCount  = locations.filter(l => l.isOnline).length;
+  const planInfo     = getPlan(plan);
+  const tier         = getTier(completedSales);
+  const isFeatActive = isFeatured && featuredExpiry > Date.now();
 
   // ── Cálculo de estadísticas ──────────────────────
   const todayStart = new Date(new Date().setHours(0,0,0,0)).getTime() / 1000;
@@ -721,6 +787,22 @@ export default function VendorDashboard() {
                 {onlineCount > 0 ? `${onlineCount} sede${onlineCount!==1?'s':''} en línea` : 'Todas offline'}
               </p>
               <div style={s.heroBadges}>
+                <span style={{ fontSize:'0.78rem', background:'rgba(255,255,255,0.15)', color:'#fff', padding:'0.15rem 0.5rem', borderRadius:'20px' }}>
+                  {tier.icon} {tier.name}
+                </span>
+                <span style={{ fontSize:'0.78rem', background:'rgba(255,255,255,0.15)', color:'#fff', padding:'0.15rem 0.5rem', borderRadius:'20px' }}>
+                  🪙 {coins}
+                </span>
+                {isVerified && (
+                  <span style={{ fontSize:'0.78rem', background:'#dbeafe', color:'#1d4ed8', padding:'0.15rem 0.5rem', borderRadius:'20px' }}>
+                    ✅ Verificado
+                  </span>
+                )}
+                {isFeatActive && (
+                  <span style={{ fontSize:'0.78rem', background:'#fef3c7', color:'#92400e', padding:'0.15rem 0.5rem', borderRadius:'20px' }}>
+                    ⭐ Destacado
+                  </span>
+                )}
                 {pendingCount > 0 && (
                   <span style={s.heroPendingBadge}>🔔 {pendingCount} nuevo{pendingCount>1?'s':''}</span>
                 )}
@@ -774,6 +856,110 @@ export default function VendorDashboard() {
             </div>
           );
         })()}
+
+        {/* ── MI PLAN ── */}
+        <div style={s.section}>
+          <div style={s.sectionHead}>
+            <h3 style={s.sectionTitle}>⚡ Mi plan</h3>
+            <span style={{ fontSize:'0.78rem', background: planInfo.color, color:'#fff', padding:'0.2rem 0.6rem', borderRadius:'20px', fontWeight:700 }}>
+              {planInfo.icon} {planInfo.name}
+            </span>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'0.5rem', marginBottom:'0.8rem' }}>
+            {[
+              { label:'Productos', val:`${locations.reduce((s,l)=>(s+(l.products||[]).length),0)}/${planInfo.maxProducts === Infinity ? '∞' : planInfo.maxProducts}` },
+              { label:'Sedes',     val:`${locations.length}/${planInfo.maxBranches === Infinity ? '∞' : planInfo.maxBranches}` },
+              { label:'🪙 Monedas', val: coins },
+              { label:'Nivel',     val: tier.icon + ' ' + tier.name },
+            ].map((st,i) => (
+              <div key={i} style={{ background:'var(--bg)', borderRadius:'10px', padding:'0.6rem', textAlign:'center', border:'1px solid var(--border)' }}>
+                <div style={{ fontWeight:800, fontSize:'0.95rem', color:'var(--text)' }}>{st.val}</div>
+                <div style={{ fontSize:'0.7rem', color:'var(--text-3)', marginTop:'0.1rem' }}>{st.label}</div>
+              </div>
+            ))}
+          </div>
+          {planInfo.id === 'free' && (
+            <div style={{ background:'linear-gradient(135deg,#1a5c1a,#2d7a2d)', borderRadius:'12px', padding:'0.9rem 1rem', color:'#fff' }}>
+              <p style={{ margin:'0 0 0.5rem', fontWeight:700, fontSize:'0.9rem' }}>🚀 Desbloquea más con un plan de pago</p>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'0.4rem', fontSize:'0.75rem' }}>
+                {[
+                  { name:'Básico', price:'$7/mes', perks:'50 productos · 2 sedes' },
+                  { name:'Pro',    price:'$25/mes', perks:'200 prod · 5 sedes · Analíticas' },
+                  { name:'Empresas', price:'$60/mes', perks:'Ilimitado · Todo' },
+                ].map(p => (
+                  <div key={p.name} style={{ background:'rgba(255,255,255,0.15)', borderRadius:'8px', padding:'0.5rem', textAlign:'center' }}>
+                    <div style={{ fontWeight:700 }}>{p.name}</div>
+                    <div style={{ color:'#86efac', fontWeight:800 }}>{p.price}</div>
+                    <div style={{ opacity:0.8, fontSize:'0.68rem', marginTop:'0.2rem' }}>{p.perks}</div>
+                  </div>
+                ))}
+              </div>
+              <p style={{ fontSize:'0.72rem', opacity:0.75, margin:'0.6rem 0 0', textAlign:'center' }}>
+                Contáctanos en WhatsApp para activar tu plan
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* ── CRECER EN VENDECERCA ── */}
+        <div style={s.section}>
+          <h3 style={{ ...s.sectionTitle, marginBottom:'0.9rem' }}>🚀 Crecer en VendeCerca</h3>
+
+          {/* Verificación */}
+          <div style={s.growCard}>
+            <div style={s.growCardIcon}>✅</div>
+            <div style={{ flex:1 }}>
+              <div style={s.growCardTitle}>Insignia Verificado</div>
+              <div style={s.growCardDesc}>Genera más confianza y apareces primero en búsquedas</div>
+              {isVerified ? (
+                <span style={{ fontSize:'0.8rem', background:'#dbeafe', color:'#1d4ed8', padding:'0.2rem 0.6rem', borderRadius:'20px', fontWeight:700 }}>✅ Verificado</span>
+              ) : verifStatus === 'pending' ? (
+                <span style={{ fontSize:'0.8rem', background:'#fef3c7', color:'#92400e', padding:'0.2rem 0.6rem', borderRadius:'20px', fontWeight:600 }}>⏳ Revisando solicitud</span>
+              ) : verifStatus === 'rejected' ? (
+                <span style={{ fontSize:'0.8rem', background:'#fee2e2', color:'#dc2626', padding:'0.2rem 0.6rem', borderRadius:'20px', fontWeight:600 }}>❌ Rechazada — contáctanos</span>
+              ) : (
+                <button style={s.growBtn} onClick={requestVerification}>Solicitar — $10 USD</button>
+              )}
+            </div>
+          </div>
+
+          {/* Destacar */}
+          <div style={s.growCard}>
+            <div style={s.growCardIcon}>⭐</div>
+            <div style={{ flex:1 }}>
+              <div style={s.growCardTitle}>Destacar mi perfil</div>
+              <div style={s.growCardDesc}>Aparece primero en el mapa y en la lista de compradores</div>
+              {isFeatActive ? (
+                <span style={{ fontSize:'0.8rem', background:'#fef3c7', color:'#92400e', padding:'0.2rem 0.6rem', borderRadius:'20px', fontWeight:700 }}>
+                  ⭐ Activo hasta {new Date(featuredExpiry).toLocaleDateString('es-CO')}
+                </span>
+              ) : (
+                <div style={{ display:'flex', gap:'0.5rem', flexWrap:'wrap', marginTop:'0.4rem' }}>
+                  <button style={s.growBtn} onClick={() => featureProfile(1)}>24 horas — 🪙 {FEATURED_COST.day}</button>
+                  <button style={s.growBtn} onClick={() => featureProfile(7)}>1 semana — 🪙 {FEATURED_COST.week}</button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Referidos */}
+          <div style={s.growCard}>
+            <div style={s.growCardIcon}>👥</div>
+            <div style={{ flex:1 }}>
+              <div style={s.growCardTitle}>Programa de referidos</div>
+              <div style={s.growCardDesc}>Gana 🪙 10 por cada persona que se registre con tu código</div>
+              <div style={{ display:'flex', gap:'0.5rem', alignItems:'center', marginTop:'0.5rem', flexWrap:'wrap' }}>
+                <span style={{ fontFamily:'monospace', background:'var(--bg)', border:'1.5px solid var(--border)', padding:'0.25rem 0.7rem', borderRadius:'8px', fontWeight:800, fontSize:'0.95rem', letterSpacing:'0.1em', color:'var(--text)' }}>
+                  {referralCode}
+                </span>
+                <button style={s.growBtn} onClick={() => {
+                  navigator.clipboard.writeText(referralCode).catch(()=>{});
+                  toast.success('Código copiado');
+                }}>📋 Copiar</button>
+              </div>
+            </div>
+          </div>
+        </div>
 
         {/* ESTADÍSTICAS */}
         <div style={s.section}>
@@ -1248,6 +1434,13 @@ export default function VendorDashboard() {
 }
 
 const s = {
+  /* Crecer */
+  growCard:     { display:'flex', gap:'0.8rem', alignItems:'flex-start', padding:'0.8rem', background:'var(--bg)', borderRadius:'12px', border:'1px solid var(--border)', marginBottom:'0.6rem' },
+  growCardIcon: { fontSize:'1.4rem', flexShrink:0 },
+  growCardTitle:{ fontWeight:700, fontSize:'0.9rem', color:'var(--text)', marginBottom:'0.2rem' },
+  growCardDesc: { fontSize:'0.78rem', color:'var(--text-2)', marginBottom:'0.4rem' },
+  growBtn:      { fontSize:'0.8rem', fontWeight:600, background:'var(--green-light)', color:'var(--green)', border:'1px solid var(--green-border)', borderRadius:'8px', padding:'0.3rem 0.7rem', cursor:'pointer', fontFamily:'inherit' },
+
   page:       { background:'var(--bg)', minHeight:'calc(100vh - 60px)', padding:'1.5rem 1rem' },
   container:  { maxWidth:'720px', margin:'0 auto', display:'flex', flexDirection:'column', gap:'1.2rem' },
   loading:    { padding:'3rem', textAlign:'center', color:'var(--text-3)' },

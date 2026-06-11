@@ -44,10 +44,14 @@ export function AuthProvider({ children }) {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setLoading(true);
       if (user) {
-        const userDoc = await getDoc(doc(db, 'users', user.uid));
-        if (userDoc.exists()) {
-          setUserRole(userDoc.data().role);
-          setUserName(userDoc.data().name);
+        try {
+          const userDoc = await getDoc(doc(db, 'users', user.uid));
+          if (userDoc.exists()) {
+            setUserRole(userDoc.data().role);
+            setUserName(userDoc.data().name);
+          }
+        } catch {
+          // Firestore error — igual dejamos entrar al usuario
         }
         setCurrentUser(user);
       } else {

@@ -82,6 +82,22 @@ export default function AdminPanel() {
     toast.success(!current ? 'Vendedor puesto en línea' : 'Vendedor desconectado');
   }
 
+  async function approveVerification(vendorId) {
+    await updateDoc(doc(db, 'vendors', vendorId), {
+      isVerified: true,
+      verificationStatus: 'approved',
+      verifiedAt: serverTimestamp(),
+    });
+    setVendors(prev => prev.map(v => v.id === vendorId ? { ...v, isVerified: true, verificationStatus: 'approved' } : v));
+    toast.success('Vendedor verificado ✅');
+  }
+
+  async function rejectVerification(vendorId) {
+    await updateDoc(doc(db, 'vendors', vendorId), { verificationStatus: 'rejected' });
+    setVendors(prev => prev.map(v => v.id === vendorId ? { ...v, verificationStatus: 'rejected' } : v));
+    toast.info('Verificación rechazada');
+  }
+
   // ── Métricas globales ────────────────────────────
   const completed     = orders.filter(o => o.status === 'completado');
   const pending       = orders.filter(o => o.status === 'pendiente');
@@ -100,11 +116,14 @@ export default function AdminPanel() {
 
   const vendorsWithPending = vendors.filter(v => (v.balance||0) - (v.paidOut||0) > 0);
 
+  const pendingVerifs = vendors.filter(v => v.verificationStatus === 'pending');
+
   const TABS = [
-    { key:'metrics', label:'📊 Métricas'                              },
-    { key:'vendors', label:`🏪 Vendedores (${vendors.length})`         },
-    { key:'orders',  label:`📦 Pedidos (${orders.length})`            },
-    { key:'payouts', label:`💰 Pagos${vendorsWithPending.length > 0 ? ` (${vendorsWithPending.length})` : ''}` },
+    { key:'metrics',       label:'📊 Métricas'                              },
+    { key:'vendors',       label:`🏪 Vendedores (${vendors.length})`         },
+    { key:'orders',        label:`📦 Pedidos (${orders.length})`            },
+    { key:'payouts',       label:`💰 Pagos${vendorsWithPending.length > 0 ? ` (${vendorsWithPending.length})` : ''}` },
+    { key:'verifications', label:`✅ Verificaciones${pendingVerifs.length > 0 ? ` (${pendingVerifs.length})` : ''}` },
   ];
 
   return (
@@ -278,6 +297,58 @@ export default function AdminPanel() {
                   ${vendors.reduce((s,v) => s + Math.max(0,(v.balance||0)-(v.paidOut||0)), 0).toLocaleString()}
                 </span>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── VERIFICACIONES ── */}
+        {tab === 'verifications' && (
+          <div style={s.section}>
+            <p style={s.hint}>Solicitudes de verificación de vendedores. Verifica la identidad antes de aprobar.</p>
+            {pendingVerifs.length === 0 && (
+              <p style={s.empty}>No hay solicitudes pendientes.</p>
+            )}
+            <div style={s.vendorList}>
+              {vendors
+                .filter(v => v.verificationStatus === 'pending' || v.isVerified || v.verificationStatus === 'rejected')
+                .sort((a,b) => (a.verificationStatus === 'pending' ? -1 : 1))
+                .map(v => (
+                  <div key={v.id} style={{ ...s.vendorCard, flexWrap:'wrap', gap:'0.6rem' }}>
+                    <div style={s.vendorLeft}>
+                      {v.photoURL
+                        ? <img src={v.photoURL} alt={v.name} style={s.vendorAvatar} />
+                        : <div style={s.vendorAvatarFallback}>{v.name?.[0]?.toUpperCase()}</div>
+                      }
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={s.vendorName}>{v.name}</div>
+                        <div style={{ fontSize:'0.75rem', color:'var(--text-3)', marginTop:'0.2rem' }}>
+                          {v.email || ''} · {(v.completedSales||0)} ventas
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ display:'flex', alignItems:'center', gap:'0.5rem', marginLeft:'auto' }}>
+                      {v.isVerified ? (
+                        <span style={{ fontSize:'0.82rem', background:'#dbeafe', color:'#1d4ed8', padding:'0.25rem 0.7rem', borderRadius:'20px', fontWeight:700 }}>✅ Verificado</span>
+                      ) : v.verificationStatus === 'pending' ? (
+                        <>
+                          <button
+                            style={{ ...s.toggleBtn, ...s.toggleOn, background:'#dcfce7', color:'#166534', borderColor:'#86efac' }}
+                            onClick={() => approveVerification(v.id)}>
+                            ✅ Aprobar
+                          </button>
+                          <button
+                            style={{ ...s.toggleBtn, background:'#fee2e2', color:'#dc2626', borderColor:'#fca5a5' }}
+                            onClick={() => rejectVerification(v.id)}>
+                            ❌ Rechazar
+                          </button>
+                        </>
+                      ) : v.verificationStatus === 'rejected' ? (
+                        <span style={{ fontSize:'0.82rem', background:'#fee2e2', color:'#dc2626', padding:'0.25rem 0.7rem', borderRadius:'20px', fontWeight:600 }}>Rechazada</span>
+                      ) : null}
+                    </div>
+                  </div>
+                ))
+              }
             </div>
           </div>
         )}

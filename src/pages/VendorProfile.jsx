@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, getDoc, collection, query, where, getDocs, updateDoc, increment } from 'firebase/firestore';
 import { db } from '../firebase/config';
+import { getTier } from '../config/plans';
 import usePageMeta from '../hooks/usePageMeta';
 import ShareModal from '../components/ShareModal';
 import GalleryModal from '../components/GalleryModal';
@@ -23,7 +24,10 @@ export default function VendorProfile() {
 
   useEffect(() => {
     getDoc(doc(db, 'vendors', id)).then(snap => {
-      if (snap.exists()) setVendor({ id: snap.id, ...snap.data() });
+      if (snap.exists()) {
+        setVendor({ id: snap.id, ...snap.data() });
+        updateDoc(doc(db, 'vendors', id), { views: increment(1) }).catch(() => {});
+      }
     });
     getDocs(query(collection(db, 'reviews'), where('vendorId', '==', id))).then(snap => {
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -63,10 +67,23 @@ export default function VendorProfile() {
             : <div style={s.avatar}>{vendor.name?.[0]?.toUpperCase()}</div>
           }
           <div style={{ flex:1, minWidth:0 }}>
-            <h2 style={s.name}>{vendor.name}</h2>
-            <span style={s.badge(vendor.isOnline)}>
-              {vendor.isOnline ? '🟢 En línea' : '⚫ Offline'}
-            </span>
+            <div style={{ display:'flex', alignItems:'center', gap:'0.4rem', flexWrap:'wrap', marginBottom:'0.3rem' }}>
+              <h2 style={{ ...s.name, margin:0 }}>{vendor.name}</h2>
+              {vendor.isVerified && (
+                <span title="Vendedor verificado" style={{ background:'#dbeafe', color:'#1d4ed8', fontSize:'0.75rem', fontWeight:700, padding:'0.15rem 0.5rem', borderRadius:'20px' }}>✅ Verificado</span>
+              )}
+            </div>
+            <div style={{ display:'flex', gap:'0.4rem', flexWrap:'wrap', alignItems:'center' }}>
+              <span style={s.badge(vendor.isOnline)}>
+                {vendor.isOnline ? '🟢 En línea' : '⚫ Offline'}
+              </span>
+              {(() => { const t = getTier(vendor.completedSales || 0); return t.id !== 'bronze' ? (
+                <span style={{ fontSize:'0.75rem', background:'#fef3c7', color:'#92400e', padding:'0.15rem 0.5rem', borderRadius:'20px', fontWeight:700 }}>{t.icon} {t.name}</span>
+              ) : null; })()}
+              {vendor.views > 0 && (
+                <span style={{ fontSize:'0.72rem', color:'var(--text-3)' }}>👁 {vendor.views} visitas</span>
+              )}
+            </div>
           </div>
           <button style={s.shareBtn} onClick={() => setShowShare(true)} title="Compartir perfil">
             📤
