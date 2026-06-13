@@ -69,3 +69,4 @@ export function generateReferralCode(uid) {
 
 export const FEATURED_COST = { day: 10, week: 50 };
 export const REFERRAL_REWARD = 10;
+export const VERIFICATION_COST_COP = 10000; // $10.000 COP — insignia Verificado

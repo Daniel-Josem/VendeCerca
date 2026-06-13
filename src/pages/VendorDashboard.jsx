@@ -8,7 +8,9 @@ import ChatDrawer from '../components/ChatDrawer';
 import ShareModal from '../components/ShareModal';
 import { v4 as uuidv4 } from 'uuid';
 import { useToast } from '../context/ToastContext';
-import { getPlan, getTier, generateReferralCode, FEATURED_COST } from '../config/plans';
+import { getPlan, getTier, generateReferralCode, FEATURED_COST, VERIFICATION_COST_COP } from '../config/plans';
+
+const PLATFORM_WOMPI_KEY = import.meta.env.VITE_WOMPI_PUBLIC_KEY;
 import { requestFCMToken } from '../firebase/messaging';
 import { MapContainer, TileLayer, Marker, Circle, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
@@ -690,12 +692,21 @@ export default function VendorDashboard() {
 
   async function requestVerification() {
     if (verifStatus === 'pending') { toast.info('Tu solicitud ya está en proceso'); return; }
+    if (!PLATFORM_WOMPI_KEY) { toast.error('Pagos no disponibles por el momento. Intenta más tarde.'); return; }
+
+    // Abre el checkout de Wompi para cobrar la insignia (mismo patrón que los pedidos)
+    const ref = `vc-verif-${currentUser.uid.slice(0, 6)}-${Date.now()}`;
+    const amountCents = VERIFICATION_COST_COP * 100;
+    const url = `https://checkout.wompi.co/p/?public-key=${encodeURIComponent(PLATFORM_WOMPI_KEY)}&currency=COP&amount-in-cents=${amountCents}&reference=${ref}`;
+    window.open(url, '_blank', 'width=600,height=700');
+
     await updateDoc(doc(db, 'vendors', currentUser.uid), {
       verificationStatus: 'pending',
       verificationRequestedAt: serverTimestamp(),
+      verificationPaymentRef: ref,
     });
     setVerifStatus('pending');
-    toast.success('Solicitud enviada. El equipo la revisará pronto.');
+    toast.success('Completa el pago en la ventana de Wompi. Revisaremos tu solicitud al confirmarlo.');
   }
 
   async function featureProfile(days) {
@@ -918,7 +929,7 @@ export default function VendorDashboard() {
               ) : verifStatus === 'rejected' ? (
                 <span style={{ fontSize:'0.8rem', background:'#fee2e2', color:'#dc2626', padding:'0.2rem 0.6rem', borderRadius:'20px', fontWeight:600 }}>❌ Rechazada — contáctanos</span>
               ) : (
-                <button style={s.growBtn} onClick={requestVerification}>Solicitar — $10 USD</button>
+                <button style={s.growBtn} onClick={requestVerification}>Solicitar — ${VERIFICATION_COST_COP.toLocaleString('es-CO')} 💳</button>
               )}
             </div>
           </div>
